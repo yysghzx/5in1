@@ -3,7 +3,6 @@
 # 增加资金监控不动qmt账户外来资金
 # 增加deepseek概念映射
 # 增加5%缓冲资金防止股价上涨买不到票
-# 增加注释
 # ============================================================================
 # 打板策略 v2.2.0
 # 基于之前版本的策略 完整重构买点模型
@@ -60,171 +59,195 @@ from test_hot_concept_utils import (
     ConceptMapper
 )
 
+"""
+小白阅读指南
+1. `initialize`
+   策略启动入口。初始化全局变量 g，并注册所有定时任务。
+2. `get_stock_list`
+   每日选股入口。把股票分进不同模式的候选池。
+3. `buy` / `execute_buy`
+   `buy` 负责判断当前是否允许买，`execute_buy` 负责真正下单。
+4. `sell_for_rebalance` / `sell_limit_per5min` / `sell2`
+   卖出与风控逻辑，分别处理早盘调仓、盘中监控、尾盘止盈止损。
+
+常见缩写
+- `lb`: 连板龙头
+- `yje`: 一进二
+- `rzq`: 弱转强
+- `dk`: 低开
+- `fxsbdk`: 反向首板低开
+
+这套策略的大致日内节奏
+1. 09:25 `record_morning_stats`
+   先看大盘环境，决定今天偏进攻还是偏防守。
+2. 09:26~09:28 `get_stock_list`
+   连续尝试选股，避免集合竞价数据晚到。
+3. 09:32 `sell_for_rebalance`
+   如果旧持仓开盘表现差，先卖掉腾仓位。
+4. 09:33 `buy_after_auction_filter`
+   对候选股做一次开盘后的内外比过滤，通过才买。
+5. 09:40 `buy_after_auction_filter_retry`
+   刚才没通过的票，再给一次机会。
+6. 盘中 `sell_limit_per5min` / `sell2` / `execute_buy`
+   每隔几分钟检查一次该不该卖，卖完后也可能补入新票。
+7. 15:00 以后
+   记录盘后统计、交易日志，并清理缓存。
+"""
+
 
 # ============================================================================
 # 1. 初始化函数、日志函数
 # ========================================================================
 def initialize(context):
-    # ============================================================
-    # 聚宽策略必须有的入口函数，策略启动时执行一次，完成所有全局变量初始化和定时任务注册
-    # ============================================================
-    set_option('use_real_price', True)   # 使用真实价格（而非复权价），模拟实盘成交
-    log.set_level('system', 'error')     # 只打印系统错误日志，减少噪音
-    set_option('avoid_future_data', True)  # 禁止使用未来数据，防止回测时数据穿越
+    """
+    策略初始化入口。
 
-    g.is_empty = False   # 空仓标志：True=当日满足空仓条件，不参与买入
+    这里主要做三件事：
+    1. 设置平台运行参数；
+    2. 初始化全局状态 g；
+    3. 注册全天要自动执行的任务。
+    """
+    set_option('use_real_price', True)
+    log.set_level('system', 'error')
+    set_option('avoid_future_data', True)
 
-    # ==================== 仓位与资金配置 ====================
-    g.position_limit = 2  # 最大同时持股数，改这里可控制分仓数
+    g.is_empty = False
+
+    # ===== 账户与仓位配置 =====
+    g.position_limit = 2  # 最大持仓数量，可配置
     g.cash_reserve_ratio = 0.05  # 保留5%资金缓冲，防止QMT执行时价格小幅上涨导致不够买
 
-    # ==================== 因子筛选配置 ====================
-    # 聚宽因子
+    # ===== 评分与排序配置 =====
     g.jqfactor = 'VOL5'  # 5日平均换手率（只是做为示例）
     g.sort = True  # 选取因子值最小
 
-    # ==================== 情绪与周期统计 ====================
-    g.emo_count = []   # 记录每日最高连板数，用于判断市场情绪周期；最近3日数值不创新高则 cyc=0
-
-    # ==================== 五大策略候选池（每日盘前选股填充）====================
-    # gap_up     = 一进二：昨日涨停、前日未涨停的股票（打板成功后的第二天）
-    # gap_down   = 首板低开：昨日涨停、今日集合竞价低开的股票
-    # reversal   = 弱转强：历史曾涨停后震荡、今日出现反转信号的股票
-    # fxsbdk     = 反向首板低开：历史低位第一板、今日高开的股票
-    # lblt       = 连板龙头：连续多日涨停的龙头股
+    # ===== 各策略模式的候选池 =====
+    # 每天选股后，这些列表会被重新填充。
+    g.emo_count = []
     g.gap_up = []
     g.gap_down = []
     g.reversal = []
     g.fxsbdk = []
     g.lblt = []
+    g.hot_concepts_cache = []
+    g.cache_max_days = 5
+    g.min_score = 14
+    g.qualified_stocks = []
+    g.lblt_stocks = []
+    g.rzq_stocks = []
+    g.gk_stocks = []
+    g.dk_stocks = []
+    g.fxsbdk_stocks = []
+    g.last_trade_info = None
+    g.score_cache = {}  # 存储股票评分结果
+    g.concept_num = 8  # 缓每日热点概念最大个数
+    g.priority_config = []
+    g.dynamic_params = {}  # 新增动态参数字典
+    g.stocks_limit_up_today = set()
+    g.max_sell_vol_ratio = 1.4  # 最大波段卖量比1.4
+    g.morning_rebalance_vol_ratio = 2.1  # 早盘调仓量比阈值
 
-    # ==================== 热点概念缓存 ====================
-    g.hot_concepts_cache = []   # 同花顺热点概念数据缓存列表
-    g.cache_max_days = 5        # 概念缓存最多保留天数
-
-    # ==================== 评分与候选股 ====================
-    g.min_score = 14             # 股票进入候选池的最低综合评分（满分约60分）
-    g.qualified_stocks = []      # 最终通过所有筛选的候选股列表，按优先级排序
-
-    # 各策略模式的股票子列表（评分筛选后更新，用于排序和买入原因标注）
-    g.lblt_stocks = []     # 连板龙头(lb)
-    g.rzq_stocks = []      # 弱转强(rzq)
-    g.gk_stocks = []       # 一进二(yje)
-    g.dk_stocks = []       # 首板低开(dk)
-    g.fxsbdk_stocks = []   # 反向首板低开(fxsbdk)
-
-    g.last_trade_info = None   # 上一次买入记录（用于日志对比）
-    g.score_cache = {}         # 股票评分缓存：{股票代码: {total_score, factor1..6, ...}}，当日有效
-    g.concept_num = 8          # 每日热点概念最多缓存个数
-    g.priority_config = []     # 当日策略优先级列表，如 ['lb','rzq','yje','dk','fxsbdk']
-    g.dynamic_params = {}      # 盘前根据大盘趋势动态更新的参数字典，目前存 trend
-
-    g.stocks_limit_up_today = set()   # 当日已涨停股票集合，买入时跳过
-    g.max_sell_vol_ratio = 1.4        # 波段卖出时要求的最低量比倍数（当前量比>此值才卖）
-    g.morning_rebalance_vol_ratio = 2.1  # 09:32早盘调仓时，触发卖出换仓的量比阈值
-
-    # 选股完成标志（防止09:26/27/28三次定时任务重复执行）
+    # 新增：选股完成标志
     g.stock_list_done = False
-    g._deferred_buy_stocks = []  # 09:33内外比不通过的股票，推迟到09:40二次确认买入
+    g._deferred_buy_stocks = []  # 09:32内外比不通过的股票，推迟到09:40二次确认
 
-    # 日志统计结构（每日交易数据汇总）
+    # 添加日志统计变量
     g.trade_stats = {
-        'daily_returns': [],  # 每日收益列表
+        'daily_returns': [],  # 每日收益
         'position_stats': {},  # 持仓统计
-        'market_stats': {},   # 大盘状态：trend/change_rate/volatility/volume_ratio
-        'trade_details': []   # 交易明细列表
+        'market_stats': {},  # 市场统计
+        'trade_details': []  # 交易明细
     }
 
-    # ===== 热点概念模块全局设置（同花顺概念数据 + DeepSeek映射）=====
+    # ===== 热点概念模块全局设置 =====
     from test_hot_concept_utils import set_g, set_logger, set_deepseek_api_key
     set_g(g)
     set_logger(log)
     set_deepseek_api_key("sk-db2d0d33cf4747d5bae53ecb21de49ad")  # TODO: 替换为你的真实 DeepSeek API Key
 
-    # ==================== 定时任务注册 ====================
-    # 聚宽的 run_daily 会在每个交易日指定时间触发对应函数
-    run_daily(record_morning_stats, '09:25')   # 盘前：统计大盘趋势、更新策略优先级
-    run_daily(record_closing_stats, '15:00')   # 盘后：记录收盘数据
-    # 选股任务重试三次（集合竞价数据有时延迟，重试确保获取到）
+    # ===== 定时任务总表 =====
+    # 可以把 run_daily 理解成“到了这个时间，就自动调用对应函数”。
+    run_daily(record_morning_stats, '09:25')  # 盘前数据统计
+    run_daily(record_closing_stats, '15:00')  # 盘后数据统计
+    # 原选股任务 (09:28:00) 替换为三次重试
     run_daily(get_stock_list, '09:26:00')  # 第一次尝试
-    run_daily(get_stock_list, '09:27:00')  # 第二次尝试（若已完成则跳过）
-    run_daily(get_stock_list, '09:28:00')  # 第三次尝试（若已完成则跳过）
-    run_daily(buy, '14:51:00')             # 周五下午14:51建仓（弱转强/一进二）
-    run_daily(sell_limit_down, time='09:28', reference_security='000300.XSHG')  # 开盘前：检查放量长上影信号
-    run_daily(log_daily_trades, '15:05')           # 盘后：汇总当日交易日志
-    run_daily(daily_garbage_collection, '15:30')   # 盘后：清理内存缓存，防OOM崩溃
+    run_daily(get_stock_list, '09:27:00')  # 第二次尝试
+    run_daily(get_stock_list, '09:28:00')  # 第三次尝试
+    run_daily(buy, '14:51:00')  # 周五下午建仓
+    run_daily(sell_limit_down, time='09:28', reference_security='000300.XSHG')
+    run_daily(log_daily_trades, '15:05')  # 每日15:05记录当日交易
+    run_daily(daily_garbage_collection, '15:30')  # 每日盘后清理内存碎片，防OOM
 
-    # 早盘流程：09:32卖出调仓 → 09:33内外比过滤后买入 → 09:40未通过的股票二次确认
+    # 新增：09:32早盘调仓仅卖出 + 内外比过滤买入 + 09:40二次确认
     run_daily(sell_for_rebalance, '09:32:00', reference_security='000300.XSHG')
     run_daily(buy_after_auction_filter, '09:33:00', reference_security='000300.XSHG')
     run_daily(buy_after_auction_filter_retry, '09:40:00', reference_security='000300.XSHG')
 
-    # sell2：盘中每30分钟一次，检查持仓是否需要卖出（大级别波段卖）
+    # 优化：sell2函数调度（9:31~14:56每15分钟一次，避开竞价时间）
     sell2_times = [
-        "10:31", "11:01",           # 上午时段
-        "13:31", "14:01", "14:31", "14:50"  # 下午时段（14:50替代15:00，避免临收盘操作）
+        # 上午时段
+        "10:31", "11:01",
+        # 下午时段（跳过午间休市）
+        "13:31", "14:01", "14:31", "14:50"  # 最后一次为14:50（替代15:00）
     ]
     for time_str in sell2_times:
         run_daily(sell2, time=time_str, reference_security='000300.XSHG')
 
-    # sell_limit_per5min：盘中每5分钟检测同花顺波段卖信号 + 放量大跌信号
+    # 优化：使用循环设置每5分钟检测任务
     sell_per5min_times = []
 
-    # 上午：9:35~9:59 每5分钟，10:01~10:26 每5分钟
+    # 1. 上午时间段：9:35-9:59 每5分钟，10:01-10:26 每5分钟
     for hour in range(9, 11):
         start_minute = 35 if hour == 9 else 1  # 9点从35分开始，10点从1分开始
-        end_minute = 60 if hour == 9 else 27   # 9点到59分，10点到26分结束
+        end_minute = 60 if hour == 9 else 27  # 9点到59分，10点到26分结束
         for minute in range(start_minute, end_minute, 5):
             time_str = f"{hour:02d}:{minute:02d}"
             sell_per5min_times.append(time_str)
 
-    # 下午：13:01~13:59 每5分钟，14:01~14:46 每5分钟
+    # 2. 下午时间段：13:01-13:59 每5分钟，14:01-14:46 每5分钟
     for hour in range(13, 15):
-        start_minute = 1
-        end_minute = 60 if hour == 13 else 47  # 14点到46分结束
+        start_minute = 1 if hour == 13 else 1  # 13点/14点从1分开始
+        end_minute = 60 if hour == 13 else 47  # 13点到59分，14点到46分结束
         for minute in range(start_minute, end_minute, 5):
             time_str = f"{hour:02d}:{minute:02d}"
             sell_per5min_times.append(time_str)
 
-    # 注册 sell_limit_per5min 定时任务（每5分钟触发一次）
+    # ========== 设置 sell_limit_per5min 定时任务 ==========
     for time_str in sell_per5min_times:
         run_daily(sell_limit_per5min, time=time_str, reference_security='000300.XSHG')
 
-    # execute_buy：每次 sell_limit_per5min 执行后延迟1分钟触发买入
-    # 目的：如果有持仓卖出腾出仓位，稍等1分钟再判断是否补入新票
+    # ========== 设置 execute_buy 定时任务（sell后1分钟），仅在周一到周四执行 ==========
     for time_str in sell_per5min_times:
+        # 解析时间字符串为 datetime 对象
         base_time = dt.datetime.strptime(time_str, "%H:%M")
+        # 加1分钟
         delay_time = base_time + timedelta(minutes=1)
-        delay_time_str = delay_time.strftime("%H:%M")  # 处理进位，如 9:59+1=10:00
+        # 转回 HH:MM 格式字符串（处理进位，如 9:59+1=10:00）
+        delay_time_str = delay_time.strftime("%H:%M")
+        # 设置 execute_buy 定时任务
         run_daily(execute_buy, time=delay_time_str, reference_security='000300.XSHG')
 
 
-# 策略代号说明：
-#   lb     = 连板龙头（lblt）：连续多日涨停的龙头股，情绪最高潮时胜率最高
-#   rzq    = 弱转强：前期弱势调整后出现反转信号的股票
-#   yje    = 一进二（gk）：昨日第一次涨停、今日继续冲击第二板的股票
-#   dk     = 首板低开：昨日首次涨停、今日低开的股票（博反包）
-#   fxsbdk = 反向首板低开：低位首板、今日高开的股票（强势延续）
-
+# 根据市场环境更新策略优先级
 def update_strategy_priority(trend):
-    """根据大盘趋势动态调整五大策略的优先级顺序"""
-    # 优先级列表中越靠前的策略，在有限仓位下越优先买入
+    """根据市场趋势更新策略优先级"""
+    # 根据分析结果设置不同市场环境下的策略优先级
     if trend == 'down':
-        # 下跌市场：优先防御性策略（低位首板、反向首板），规避追高
+        # 下跌市场: 反向首板低开(100%)、一进二(67%)、弱转强(0%)
         g.priority_config = ["lb", "fxsbdk", "yje", "rzq", "dk"]
     elif trend == 'strong_up':
-        # 强势上涨市场：连板龙头最强，弱转强次之
+        # 强势上涨市场: 连板龙头(56%)、弱转强(50%)、一进二(50%)
         g.priority_config = ["lb", "rzq", "yje", "fxsbdk", "dk"]
     elif trend == 'flat':
-        # 震荡市场：同强势上涨，偏保守
+        # 平稳市场: 连板龙头(67%)、一进二(41%)
         g.priority_config = ["lb", "rzq", "yje", "fxsbdk", "dk"]
     elif trend == 'up':
-        # 普通上涨市场：一进二胜率更高（趋势明确但情绪未过热）
+        # 上涨市场: 一进二(40%)、连板龙头(35%)
         g.priority_config = ["yje", "lb", "rzq", "fxsbdk", "dk"]
     else:
-        # 默认优先级（trend 为空或未知时）
+        # 默认优先级
         g.priority_config = ["lb", "rzq", "yje", "dk", "fxsbdk"]
-    # 将当前优先级配置存入统计结构，方便盘后分析
+    # 存储当前策略优先级
     g.trade_stats['strategy_priority'] = {
         'trend': trend,
         'priority': g.priority_config
@@ -299,18 +322,11 @@ def daily_garbage_collection(context):
 
 def _compute_inside_outside_ratio(stock, end_dt, tick_count=300):
     """
-    基于逐笔成交数据计算内外比（外盘量 / 内盘量）。
-
-    【内外比是什么】
-    - 外盘（主动买入）：买方主动以卖一价成交，推动价格上涨 → 做多力量
-    - 内盘（主动卖出）：卖方主动以买一价成交，压低价格 → 做空力量
-    - 内外比 = 外盘量 / 内盘量；>1 说明多方占优，<1 说明空方占优
-
-    【判断方法】
-    聚宽 get_ticks 没有直接的买卖方向字段，用相邻tick价格变化推断：
-      price上涨 → 主动买入（外盘）；price下跌 → 主动卖出（内盘）
-
-    返回: (外盘量, 内盘量, 内外比)
+    基于 get_ticks 逐笔数据计算当日开盘后累计内外比。
+    get_ticks 无"买/卖"方向字段，基于相邻tick的 current 变化推断：
+      - current 较上笔上涨 → 外盘（主动买入推动价格）
+      - current 较上笔下跌 → 内盘（主动卖出压低价格）
+    返回 (外盘量, 内盘量, 内外比)，内外比 = 外盘/内盘。
     """
     try:
         ticks = get_ticks(stock, end_dt=end_dt, count=tick_count, df=True)
@@ -344,15 +360,9 @@ def _compute_inside_outside_ratio(stock, end_dt, tick_count=300):
 
 def sell_for_rebalance(context):
     """
-    09:32 早盘调仓（只卖不买）：判断当前持仓是否值得继续持有，不值得则卖出腾出仓位供 09:33 买入新股。
-
-    触发卖出的两种情况：
-      情况1（涨幅不足+早盘放量）：
-          当日涨幅<5% 且 持仓盈利<5% 且 1min量比>morning_rebalance_vol_ratio(默认2.1)
-          → 说明股票开盘放量但价格无力，可能被主力出货，换掉更优标的
-      情况2（天量止盈）：
-          当日涨幅>=5% 且 1min量比>28
-          → 极端放量涨停/大涨，先止盈锁定利润
+    09:32执行：基于当日涨幅+量比判断是否卖出持仓腾仓位。
+    条件1：当日涨幅<5% + 成本<5% + 1min量比>阈值 → 卖出
+    条件2：当日涨幅>=5% + 1min量比>28 → 天量止盈
     """
     try:
         current_hour = context.current_dt.hour
@@ -415,22 +425,9 @@ def sell_for_rebalance(context):
 
 def buy_after_auction_filter(context, use_deferred=False):
     """
-    开盘后用内外比过滤候选股，通过的立即买入。
-
-    09:33（use_deferred=False）：
-        对 g.qualified_stocks 全部候选计算内外比
-        → 内外比>=1（多方占优）则买入
-        → 内外比<1（空方占优）则暂存到 g._deferred_buy_stocks，等待 09:40 二次确认
-
-    09:40（use_deferred=True，由 buy_after_auction_filter_retry 调用）：
-        对 09:33 被拒的股票再次计算内外比（取更多tick数据500条）
-        → 通过则买入，不通过则放弃
-
-    过滤逻辑：
-        1. 已涨停的票跳过（涨停买不到）
-        2. 已持仓的票跳过（避免重复买入）
-        3. 内外比>=1 视为多方占优，允许买入
-        4. 外盘和内盘都是0（无成交tick）也允许买入，避免误杀
+    内外比过滤买入。
+    use_deferred=False (09:33)：对 g.qualified_stocks 全部候选计算内外比 → 通过则买入，拒绝暂存 g._deferred_buy_stocks
+    use_deferred=True  (09:40)：对 g._deferred_buy_stocks 中被拒股票二次确认 → 通过则买入
     """
     if getattr(g, 'is_empty', False):
         return
@@ -512,7 +509,16 @@ def check_cache_status():
 
 def calculate_mainline_score_optimized(stock, context):
     """
-    优化的主线评分计算函数，匹配概念去重后按个数计分
+    计算“主线概念”因子分。
+
+    这项分数回答的是：
+    “这只股票是不是踩在今天市场最热的题材线上？”
+
+    计算方法很直白：
+    - 先拿到今天的热门概念列表；
+    - 再看这只股票自身有哪些概念；
+    - 两边做匹配，命中几个热门概念就按数量加分。
+
     参数:
         stock: 股票代码
         context: 上下文对象
@@ -520,7 +526,7 @@ def calculate_mainline_score_optimized(stock, context):
         主线评分（匹配1个概念得2分，数量越多分数越高）
     """
     try:
-        # 获取热门概念列表（优先读全局缓存，避免重复 API 调用）
+        # 优先读缓存，避免每只股票都重复请求热门概念数据
         hot_concepts_result = getattr(g, 'hot_concepts_today', None) or get_all_hot_concepts_optimized(context)
         # 提取所有热门概念的名称列表
         hot_concepts_list = [concept['name'] for concept in hot_concepts_result['all_concepts']]
@@ -545,7 +551,7 @@ def calculate_mainline_score_optimized(stock, context):
         stock_concepts = [concept['name'] for concept in stock_info.concepts]
         log.info(f"股票 {stock} 所属概念名称: {stock_concepts}")
 
-        # 检查是否有匹配的热门概念，并去重
+        # 主线分按“命中的热门概念个数”来算，不重复计数
         matched_concepts = [c for c in stock_concepts if c in hot_concepts_set]
         unique_matched = list(set(matched_concepts))  # 去重处理
         match_count = len(unique_matched)  # 去重后的匹配数量
@@ -577,17 +583,10 @@ def calculate_mainline_score_optimized(stock, context):
 
 def get_industry_trend(stock, context, ma_short=5, ma_mid=20, ma_long=60):
     """
-    判断股票所在申万二级行业的整体趋势，用于前置过滤行业下行的股票。
-
-    【判断逻辑】
-    1. 取该股票所在申万L2行业的全部有效成分股（剔除ST和上市不足60天的新股）
-    2. 批量获取成分股的历史收盘价，归一化后计算等权行业指数（类似行业平均线）
-    3. 计算 MA5 的斜率变化（近3日 vs 前3日）：
-       - slope_recent > 0         → 'up'（MA5上升，行业动能正向）
-       - slope_recent > slope_prev → 'momentum'（MA5仍下降但速度减慢，可能底部反转）
-       - 其他                     → 'down'（下跌加速，过滤掉）
-
-    返回: 'up' / 'down' / 'momentum' / 'unknown'
+    通过申万二级行业成分股均值判断该股所在行业的趋势。
+    过滤条件：MA5 > MA20（行业短期动能为正）。
+    MA60 仅作日志参考，不参与过滤。
+    返回: 'up' / 'down' / 'unknown'
     """
     try:
         # 1. 获取申万L2行业分类（粒度更细，约100个子行业）
@@ -702,15 +701,9 @@ def get_industry_trend(stock, context, ma_short=5, ma_mid=20, ma_long=60):
 
 def filter_stocks_by_industry_trend(stocks, context):
     """
-    前置过滤：剔除所在行业处于下降趋势的股票，只保留行业向上或有反转信号的票。
-
-    【过滤规则】
-    - 'up'       → 通过（行业MA5上升）
-    - 'momentum' → 通过（MA5仍下降但速度减慢，可能底部反转）
-    - 'unknown'  → 通过（无法判断，不误杀）
-    - 'down'     → 过滤（行业趋势明确向下，不买逆势股）
-
-    行业趋势结果缓存到 g._industry_trend_cache，同行业多只股票只计算一次（提速）
+    前置行业趋势过滤：只保留申万L2行业 MA5>MA20 或近5日涨幅>3% 的股票。
+    行业趋势缓存到 g._industry_trend_cache，同一行业当日只查询一次。
+    返回 (passed, filtered_out) 两个列表。
     """
     if not hasattr(g, '_industry_trend_cache'):
         g._industry_trend_cache = {}
@@ -757,23 +750,23 @@ def filter_stocks_by_industry_trend(stocks, context):
 # ============================================================================
 def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=100):
     """
-    六因子评分体系综合筛选股票，返回最终候选列表。
+    评分筛选主函数。
 
-    【六大因子说明】
-    - factor1_涨停：近期涨停次数/连板数，反映股票强度
-    - factor2_技术：技术形态分（均线位置、趋势方向等）
-    - factor3_放量MA：成交量相对均量的放量情况（量能质量）
-    - factor4_主线：命中同花顺热点概念的数量（题材热度）
-    - factor5_情绪：大盘情绪评分（近期指数表现）
-    - factor6_主力资金：主力资金净流入（机构、游资买入力度）
+    这一步可以理解为“细筛”：
+    1. 先给每只股票算 6 个因子分；
+    2. 再按不同模式追加专属过滤条件；
+    3. 把通过的股票放进 g.qualified_stocks 供买入环节使用。
 
-    【各模式额外过滤条件】
-    - 连板龙头(lb)：主线分为0且情绪分<12 → 过滤；主力资金=0且涨停分<2 → 过滤
-    - 一进二(yje) ：主线分>18 过滤（题材太热=散户追高）；主力资金<6 过滤；总分<24 过滤
-    - 弱转强(rzq) ：量比限0.7~10.0，总分24~28
-    - 连板龙头量比：1.0~10.5
+    六个因子分别是：
+    - factor1_涨停: 最近涨停强度
+    - factor2_技术: 均线、RSI、位置等技术形态
+    - factor3_放量MA: 放量情况 + 均线关系
+    - factor4_主线: 是否贴近热门概念主线
+    - factor5_情绪: 大盘与个股相对情绪
+    - factor6_主力资金: 资金净流入质量
 
-    最终按总分降序排序，超过 position_limit 只取前N名
+    注意：
+    总分高不代表一定入选，因为不同模式还有单独门槛，比如量比、主线分、资金分。
     """
     try:
         log.info("=" * 60)
@@ -945,24 +938,28 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                 else:
                     processing_stats['zero_score_stocks'] += 1
 
-                # 5. 判断是否符合筛选条件
+                # 5. 第一层判断：先看“总分是否达到基础门槛”
                 is_qualified = total_score >= min_score
 
-                # ========== 关键修改3：放宽连板龙头过滤条件 ==========
+                # 第二层判断：再看“模式专属规则”
+                # 同样是高分股，如果不符合本模式特征，也会被过滤掉。
                 filtered_reason = None
                 if is_lblt_stock:
-                    # 策略2的逻辑：主线分为0且情绪分<12才过滤
+                    # 连板龙头：
+                    # 这类票最看重情绪和主线，如果又没主线、情绪又弱，就不做。
                     if factor4 == 0 and factor5 < 12:
                         is_qualified = False
                         processing_stats['filtered_by_mainline'] += 1
                         filtered_reason = '连板龙头主线分为0且情绪分<12'
-                    # 主力资金为0且涨停分<2才过滤（策略2逻辑）
+                    # 如果资金没有明显支持，同时涨停强度也一般，也过滤。
                     elif factor6 == 0 and factor1 < 2:
                         is_qualified = False
                         processing_stats['filtered_by_money_flow'] += 1
                         filtered_reason = '连板龙头主力资金为0且涨停分小于2'
 
                 if is_first_to_second_stock:
+                    # 一进二：
+                    # 既要有足够资金支持，也不能热得太夸张，否则容易变成接力末端。
                     if factor4 > 18:
                         is_qualified = False
                         processing_stats['filtered_by_mainline'] += 1
@@ -975,7 +972,7 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                         is_qualified = False
                         processing_stats['filtered_by_total_score'] += 1
                         filtered_reason = f'一进二总分<{min_total_score_yijin}'
-                    # 获取量比（已在前面通过 get_volume_data 存入 g.score_cache[stock]['volume_ratio']）
+                    # 量比可以理解为“当前活跃度”，一进二对量能比较敏感
                     volume_ratio = g.score_cache[stock].get('volume_ratio', None)
                     if volume_ratio is not None:
                         if total_score < 28 and volume_ratio < 2.6:
@@ -985,6 +982,8 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                             filtered_reason = f'一进二总分<28且量比<2.6 (总分{total_score},量比{volume_ratio:.2f})'
 
                 if is_dk_stock:
+                    # 首板低开：
+                    # 对技术形态和量价关系要求更直接，分不够就不过。
                     if factor2 < dk_min_technical:
                         is_qualified = False
                         processing_stats['filtered_by_technical'] = processing_stats.get('filtered_by_technical', 0) + 1
@@ -994,7 +993,8 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                         processing_stats['filtered_by_volume_ma'] = processing_stats.get('filtered_by_volume_ma', 0) + 1
                         filtered_reason = f'首板低开放量MA分<{dk_min_volume_ma}'
 
-                # ========== 关键修改4：优化量比过滤范围 ==========
+                # 第三层判断：按模式检查量比范围
+                # 量比太低表示不活跃，太高又可能是情绪过热或出货。
                 try:
                     # 获取股票的量比数据
                     last_volume, last_2_volume, volume_ratio = get_volume_data(stock, context)
@@ -1030,7 +1030,8 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                 except Exception as ve:
                     log.warning(f"获取股票 {stock} 的量比数据失败: {str(ve)}")
 
-                # ========== 关键修改5：优化总分过滤条件 ==========
+                # 第四层判断：按模式再看“总分区间”
+                # 有些模式不是分越高越好，而是要求落在特定区间里。
                 if is_qualified:
                     # 一进二模式总分范围：20~60分（策略2范围）
                     if is_first_to_second_stock and (total_score < 20 or total_score > 60):
@@ -1060,7 +1061,8 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                 except:
                     stock_name = "未知"
 
-                # 7. 构建评分记录（包含6个因子）
+                # 7. 保存日志用记录。
+                # 后面打印结果、排查被过滤原因，都依赖这份结构化记录。
                 record = {
                     '股票代码': stock,
                     '股票名称': stock_name,
@@ -1142,7 +1144,8 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
         log.info(f"📦 评分缓存已保存: {len(g.score_cache)} 只股票的评分（含6个因子和量比）")
         log.info("=" * 60)
 
-         # 按总评分降序排序，评分相同时按放量MA和主力资金排序
+        # 最终排序：
+        # 先比总分，再比放量MA，最后比主力资金。
         score_records_sorted = sorted(score_records, 
                                      key=lambda x: (x['总评分'], x.get('factor3_放量MA', 0), x.get('factor6_主力资金', 0)), 
                                      reverse=True)
@@ -1242,24 +1245,16 @@ def get_money_flow_map(context, qualified_stocks):
 # 同花顺指标转换为Python函数
 def calculate_ths_indicators(stock, context, period=60, unit='1d', log_debug=False):
     """
-    计算同花顺风格的 ZIG 波段买卖指标。
-
-    【ZIG 是什么】
-    ZIG(X, N%)：当价格累计变化超过N%时才记录一个转折点，过滤掉小幅噪音波动。
-    - 买线 = ZIG(收盘, 10%)：价格累计涨/跌超10%才翻转
-    - 卖线 = 买线的3日移动平均线（类似平滑后的买线）
-    - 买线上穿卖线 → 波段买信号
-    - ZIG(5%)连续3根下降形态 → 波段卖信号
-
-    【为什么用5分钟K线（unit='5m'）调用】
-    sell_limit_per5min 每5分钟检测一次，用5分钟K线更灵敏，能及时捕捉盘中趋势变化
-
-    【trend_color 含义】
-    'red'  = 买线 > 卖线 → 上升通道，适合持仓/买入
-    'green' = 买线 < 卖线 → 下降通道，考虑卖出
-
-    【last_signal_offset】
-    最近一次信号距当前K线的根数。offset<=2 表示刚刚发生，信号有效性更高
+    计算技术指标，返回买卖信号、趋势颜色及最近信号信息。
+    主信号（无未来函数，等待转折点确认后才产生信号）：
+        - 波段买: ZIG转折点确认后（至少滞后1-2根K线）
+        - 波段卖: ZIG转折点确认后 + 连续下跌形态
+    返回字典包含：
+        - buy_signals: 列表，信号字符串
+        - sell_signals: 列表，信号字符串
+        - trend_color: 'red' 表示上升通道，'green' 表示下降通道
+        - last_signal_type: 最近一次信号的类型，若没有则为 None
+        - last_signal_offset: 最近一次信号距离最后一根K线的偏移量
     """
     try:
         hist_data = attribute_history(stock, period, unit,
@@ -1515,15 +1510,8 @@ def calculate_ths_indicators(stock, context, period=60, unit='1d', log_debug=Fal
 
 def check_volume_drop_signal(stock, context):
     """
-    检测"放量大跌"信号（主力出货特征：大跌同时成交量异常放大）。
-
-    判定条件（两者同时满足）：
-    1. 当前价格相对昨日收盘价跌幅 >= 6%
-    2. 估算全天成交量 >= 近5日均量的 1.5 倍
-
-    【成交量估算说明】
-    由于当天还没收盘，用"当前累计成交量 × (全天分钟数 / 已交易分钟数)"估算全天量。
-    早盘前60分钟成交密集，加1.2倍修正系数；上午后半段用0.8~1.0修正。
+    检测放量大跌信号（跌幅6%以上且放量）
+    判定条件：当前相对昨日收盘跌幅≥6% + 估算全天成交量≥5日均量1.5倍
     """
     try:
         # 1. 获取实时行情数据，快速过滤无效标的
@@ -1611,22 +1599,9 @@ def check_volume_drop_signal(stock, context):
 
 def sell_limit_per5min(context):
     """
-    盘中每5分钟检测持仓，按条件触发卖出。
-
-    【三种卖出场景】
-    场景1 - 紧急止损（波段卖 + 放量大跌同时触发）：
-        ZIG指标趋势转绿 + 近2根K线有波段卖信号 + 跌幅>=6%且估算全天量>=5日均量1.5倍
-        → 立即清仓，双重确认防止误判
-
-    场景2 - 波段卖出（仅波段卖信号 + 亏损>=5%）：
-        ZIG趋势转绿 + 近2K线波段卖 + 持仓亏损>=5% + 5分钟量比>g.max_sell_vol_ratio(1.4)
-        → 量能放大确认趋势，减少假信号
-
-    场景3 - 放量大跌止损（仅放量大跌）：
-        跌幅相对昨收>=8% + 估算全天量>=5日均量1.5倍
-        → 硬止损，防止持续下跌
-
-    特殊规则：涨停时不卖（封板中不操作）
+    每5分钟检测持仓股票是否需要卖出
+    基于同花顺指标的波段卖信号和放量大跌信号
+    增加涨停不卖判断
     """
     # 初始化交易记录
     if not hasattr(g, 'today_trades'):
@@ -1757,18 +1732,7 @@ def sell_limit_per5min(context):
 
 
 def get_hot_leader_first_yin_stocks(context, date_1, date):
-    """
-    获取"热门龙头首阴"股票——连板龙头前日断板后的买入机会（弱转强策略来源之一）。
-
-    【首阴是什么】
-    连板龙头（连续3板以上）在某天没有涨停（断板），第二天低位整理，
-    下一步可能再次发起冲击。这种"首阴"后买入，博反包/再次涨停。
-
-    【筛选条件】
-    - date_1（前2日）：股票有3板以上连板记录
-    - 连板期间至少有一天非一字板（有换手，说明有人愿意参与）
-    - 股价 < 5元的一字板股票也可接受（流通性差可以放宽换手要求）
-    """
+    """获取热门龙头首阴股票（策略2中的关键函数）"""
     try:
         log.info("=" * 70)
         log.info("? 开始筛选热门龙头首阴股票")
@@ -1898,18 +1862,20 @@ def get_hot_leader_first_yin_stocks(context, date_1, date):
 # 2. 盘前数据统计函数
 def record_morning_stats(context):
     """
-    09:25 盘前统计：重置当日标志、计算大盘趋势、更新策略优先级。
+    盘前环境评估。
 
-    【重要说明】
-    大盘趋势用的是 attribute_history 日线数据，09:25 时最新一条是昨天的收盘数据。
-    所以 trend 反映的是"昨天相对前天"的涨跌幅，不是今天开盘情况。
-    如果昨天大涨 >1%，今天开盘即使下跌，这里仍会显示 strong_up。
+    作用很像“今天开盘前的作战会议”：
+    - 先重置昨天留下来的状态；
+    - 再看大盘最近的涨跌、波动、量能；
+    - 最后给今天定一个大方向，比如 strong_up / up / flat / down。
+
+    后面很多优先级和过滤条件，都会参考这里写进 g.dynamic_params 的结果。
     """
     try:
         log.info(f"====== {context.current_dt.strftime('%Y-%m-%d')} 盘前数据 ======")
         # 每日重置选股完成标志，确保每天重新选股
         g.stock_list_done = False
-        g.is_empty = False  # 每日重置空仓标志
+        g.is_empty = False  # 新增：每日重置空仓标志
 
         # ========== 修复点2：每日重置涨停标记 ==========
         if not hasattr(g, 'stocks_limit_up_today'):
@@ -1982,18 +1948,14 @@ def get_last_n_auction_avg(s, end_date, n=5):
 
 def sell_limit_down(context):
     """
-    09:28（开盘前）检测持仓，发现"放量长上影"形态则开盘卖出。
+    开盘前的持仓预警卖出函数。
 
-    【放量长上影是什么】
-    昨日K线：上影线远长于下影线（卖压沉重） + 成交量大于5日均量1.5倍
-    → 说明昨日有大量筹码出货，今日开盘大概率继续弱势
+    它主要处理一种情况：
+    昨天K线已经很难看，比如放量长上影，说明上方卖压重；
+    如果今天集合竞价和开盘又不够强，就优先考虑先卖。
 
-    【卖出条件（三选三）】
-    1. 上影线 > 下影线 * 3（卖方强势压制）
-    2. 今日开盘涨幅 < 2%（开盘无力，接不住昨日卖压）
-    3. 竞价量比动态判断：
-       - 开盘弱势(<0.5%)：竞价量比<2.0 允许卖出
-       - 开盘稍强(0.5~2%)：竞价量比<1.4 才卖（量大说明有人接货，不一定弱）
+    简单理解：
+    这是“开盘前先排雷”，不是全天主卖出逻辑。
     """
     date = context.previous_date
     current_data = get_current_data()
@@ -2110,13 +2072,16 @@ def sell_limit_down(context):
 # 判断是否需要空仓
 def should_empty_position(context):
     """
-    判断是否应该全仓空仓，不参与今日交易。
+    判断今天是否直接进入“空仓模式”。
 
-    【触发空仓的条件】
-    沪深300（000300）当日成交量 > 前4日均量的2倍（资金极度异常放大，可能有重大利空）
-    或 当日成交量 < 前4日均量的0.5倍（市场极度缩量，流动性枯竭）
+    设计目的：
+    市场环境太差时，今天就不选股、不买入，优先保护资金。
 
-    触发空仓时：卖出所有持仓，清空候选股列表，当日不参与任何买入
+    当前实际启用的条件：
+    1. 沪深300量能异常（大于前4日均量2倍或小于0.5倍）。
+
+    注意：
+    注释里提到的其它空仓想法不一定都已实现，真正生效的条件以函数主体为准。
     """
     # ========== 1. 量能异常检测 ==========
     try:
@@ -2133,18 +2098,17 @@ def should_empty_position(context):
     return False
 
 
-# ============================================================
-# 选股主函数（09:26/27/28 三次重试）
-# 整体流程：
-#   1. 空仓判断（大盘量能异常则清仓不参与）
-#   2. 获取初始股票池（A股去除ST/新股/低价股）
-#   3. hl0_list = 昨日涨停股列表
-#   4. hl1/hl2  = 前天/大前天曾涨停股（用于去重，避免反复追同一只）
-#   5. 计算五大策略候选池：gap_up/gap_down/reversal/fxsbdk/lblt
-#   6. 获取集合竞价数据，判断高开比例（gkb >= 76% 才设连板龙头候选）
-#   7. 选股完成后调用 buy() 触发下单
-# ============================================================
+# 选股
 def get_stock_list(context):
+    """
+    每日选股主入口。
+
+    可以把它理解为“先粗筛，再分组”的步骤：
+    1. 判断今天是否空仓；
+    2. 准备基础股票池；
+    3. 围绕昨日涨停股，拆出多个策略模式；
+    4. 把结果写入 g，供后面买入逻辑使用。
+    """
     log.info(f"[{context.current_dt.strftime('%H:%M:%S')}] get_stock_list 开始执行")
     # 如果已经完成选股，直接返回
     if getattr(g, 'stock_list_done', False):
@@ -2173,14 +2137,15 @@ def get_stock_list(context):
     else:
         g.is_empty = False
 
+    # previous_date 是上一个交易日，不一定等于自然日的“昨天”。
     date_now = context.current_dt.strftime("%Y-%m-%d")
     date = context.previous_date
     date_2, date_1, date = get_trade_days(end_date=date, count=3)
 
-    # 初始列表
+    # 初始列表 = 全市场股票，经过新股 / ST / 科创北交等基础过滤后的结果
     initial_list = prepare_stock_list(date)
 
-    # 昨日涨停
+    # 本策略围绕“涨停股”展开，所以昨日涨停列表是后续分组的起点
     hl0_list = get_hl_stock(initial_list, date)
 
     # 如果昨日涨停列表为空，则直接设置空结果并完成
@@ -2202,7 +2167,7 @@ def get_stock_list(context):
     elements_to_remove = set(hl1_list + hl2_list)
     get_all_hot_concepts_optimized(context)
 
-    # 计算 gap_up / gap_down / reversal / fxsbdk（这些不依赖集合竞价）
+    # 先算出几类不依赖集合竞价的模式池
     g.gap_up = [stock for stock in hl0_list if stock not in elements_to_remove]
     g.gap_down = [s for s in hl0_list if s not in hl1_list]
     h1_list = get_ever_hl_stock2(initial_list, date)
@@ -2218,7 +2183,7 @@ def get_stock_list(context):
             log.info(f"   ➕ {stock} | 新增断板龙头")
     g.fxsbdk = get_ll_stock(initial_list, date)
 
-    # 获取集合竞价数据
+    # 集合竞价常用于判断开盘强弱，是打板策略里的关键参考
     auction_start = date_now + ' 09:15:00'
     auction_end = date_now + ' 09:25:00'
     auctions = get_call_auction(hl0_list, start_date=auction_start, end_date=auction_end,
@@ -2237,17 +2202,14 @@ def get_stock_list(context):
         return
 
     auctions['pre_close'] = h['close']
-    # gk_list: 集合竞价价格高于前收盘价的股票（即竞价高开，说明做多意愿强）
     gk_list = auctions.query('pre_close * 1.00 < current').index.tolist()
-    # gkb: 高开比例（高开股 / 全部昨日涨停股），反映整体市场做多情绪
     gkb = len(gk_list) / len(hl0_list) * 100
 
-    # 只有超过76%的昨日涨停股今日仍高开，才认为连板氛围足够，启用连板龙头策略
     if gkb < 76:
-        g.lblt = []  # 高开比例不够，连板龙头候选清空
+        g.lblt = []
     else:
         g.lblt = hl0_list
-        # 剔除近5日有2连续以上一字板的高风险股（一字板无法参与，风险过高）
+        # 高风险一字板筛选
         high_risk_stocks = []
         lblt_stocks = []
         for stock in g.lblt:
@@ -2264,13 +2226,24 @@ def get_stock_list(context):
         g.lblt = lblt_stocks
         g.high_risk_stocks_today = high_risk_stocks  # 缓存高风险股票，供 buy() 复用
 
-    # 所有逻辑执行完毕，设置完成标志
+    # 到这里说明“今日候选池”已经准备完成，后续买入阶段可直接使用
     g.stock_list_done = True
     log.info("选股完成")
     buy(context)
 
 
 def get_dblt_stocks(hl1_list, date_1, date, context):
+    """
+    识别“断板龙头”。
+
+    什么叫断板：
+    一只连续涨停的强势股，到了下一天没有继续封住涨停，就叫断板。
+
+    这个函数做的事是：
+    1. 找出前一阶段的最高连板股；
+    2. 检查它们在下一天是否断板；
+    3. 再根据断板方式分类，判断有没有后续做弱转强的价值。
+    """
     ccd = get_continue_count_df(hl1_list, date_1, 20) if len(hl1_list) != 0 else pd.DataFrame(
         index=[],
         data={'count': [], 'extreme_count': []}
@@ -2391,16 +2364,7 @@ def get_dblt_stocks(hl1_list, date_1, date, context):
 
 
 def has_consecutive_extreme_limit(stock, date):
-    """
-    检查近5日是否存在2个及以上连续一字板（高风险标识）。
-
-    【一字板风险】
-    一字板 = 全天最高价=最低价=涨停价，说明开盘即封板，无换手机会。
-    连续2天以上一字板的股票：
-    - 次日大概率继续一字，普通投资者根本买不进去
-    - 一旦炸板，筹码大量出逃，风险极高
-    此类股票直接从连板龙头候选中排除
-    """
+    """检查股票是否有2个以上连续一字板"""
     try:
         # 获取近5个交易日的数据
         end_date = date
@@ -2437,14 +2401,13 @@ def has_consecutive_extreme_limit(stock, date):
 
 def calculate_sentiment_score_optimized(stock, context):
     """
-    计算市场情绪评分（factor5，0~5分）。
+    计算“市场情绪”因子分。
 
-    【评分维度】
-    1. 大盘近3日趋势（0~2分）：连续3日上涨+2分，只昨日上涨+1分
-    2. 大盘近2日成交量（0~2分）：放量>1.2倍+2分，>1.1倍+1分
-    3. 个股相对强度（0~1分）：个股近3日涨幅跑赢大盘2%以上+1分
-
-    情绪分高意味着大盘环境好、个股强势，买入风险更低
+    这项分数不是看个股本身有多强，而是看它所在的外部环境是否友好。
+    目前主要看三件事：
+    1. 大盘最近几天是否偏强；
+    2. 大盘成交量是否放大；
+    3. 个股最近几天是否跑赢大盘。
     """
     try:
         # 获取市场整体情况（优先读全局缓存，避免每只股票重复调用）
@@ -2459,7 +2422,7 @@ def calculate_sentiment_score_optimized(stock, context):
 
         score = 0
 
-        # 1. 市场趋势评分 (0-2分)
+        # 1. 大盘趋势
         if len(index_data) >= 3:
             recent_closes = index_data['close'].tail(3)
             if recent_closes.iloc[-1] > recent_closes.iloc[-2] > recent_closes.iloc[-3]:
@@ -2467,7 +2430,7 @@ def calculate_sentiment_score_optimized(stock, context):
             elif recent_closes.iloc[-1] > recent_closes.iloc[-2]:
                 score += 1  # 昨日上涨
 
-        # 2. 市场成交量评分 (0-2分)
+        # 2. 大盘量能
         if len(index_data) >= 5:
             recent_volume = index_data['volume'].tail(2).mean()
             avg_volume = index_data['volume'].head(-2).mean()
@@ -2477,7 +2440,8 @@ def calculate_sentiment_score_optimized(stock, context):
             elif recent_volume > avg_volume * 1.1:
                 score += 1  # 适度放量
 
-        # 3. 个股相对强度 (0-1分)
+        # 3. 个股相对强度
+        # 同样上涨时，能跑赢大盘的票，通常更值得关注。
         try:
             stock_data = attribute_history(stock, 5, '1d', ['close'], skip_paused=True)
             if not stock_data.empty and len(stock_data) >= 3:
@@ -2515,23 +2479,18 @@ def is_limit_up_open(stock, current_data):
 
 def filter_by_valuation(stock_list, context):
     """
-    估值过滤（仅4月和10月生效）：剔除亏损股和高估值垃圾股。
-
-    【为什么只在4月和10月】
-    A股财报季：4月底发布年报（3月31日截止）、10月底发布三季报，
-    这两个月最容易出现"业绩暴雷"行情，需要额外过滤业绩差的股票。
-
-    【过滤条件】
-    1. 市盈率(PE) > 0 且 <= 200（负PE=亏损公司；>200=超高估值泡沫）
-    2. 市现率(PCF) > 0（现金流为负=公司烧钱，风险高）
-    3. 市净率(PB) > 0（PB<0=资不抵债，破产风险）
+    4月专用过滤：基于 get_valuation 的多个指标组合避坑
+    条件：
+        1. pe_ratio > 0 且 pe_ratio <= 200
+        2. pcf_ratio > 0
+        3. pb_ratio > 0
     """
     if not stock_list:
         return []
-
-    # 只在4、10月生效，其他月份直接返回原列表
+    
+    # 只在4,10月生效
     current_month = context.current_dt.month
-    if current_month not in [4, 10]:
+    if current_month not in [4,10]:
         log.info(f"当前月份 {current_month}，不执行4,10月专用过滤")
         return stock_list
     
@@ -2598,17 +2557,18 @@ def filter_by_valuation(stock_list, context):
         log.error(f"估值过滤失败: {str(e)}")
         return stock_list
 
-# ============================================================
-# buy()：选股完成后的买入决策函数
-# 职责：
-#   1. 把五大策略股票按条件过滤，分别填入 lblt/rzq/gk/dk/fxsbdk_stocks
-#   2. 按当日 priority_config 合并为 qualified_stocks（去重、有序）
-#   3. 调用 filter_stocks_by_score_optimized() 打分过滤
-#   4. 早盘（09:28）：只填候选池，实际买入在 09:33 由 buy_after_auction_filter 执行
-#   5. 下午/周五14:51：直接调用 execute_buy() 买入
-# ============================================================
+# 交易
 def buy(context):
-    # 选股未完成时（集合竞价数据还没到）不执行
+    """
+    买入阶段的总控函数。
+
+    它主要负责：
+    1. 确认今天是否允许买；
+    2. 根据市场状态调整各模式优先级；
+    3. 组装不同模式的候选股票；
+    4. 最后把真正下单动作交给 execute_buy。
+    """
+    # 新增：如果选股未完成，跳过本次买入
     if not getattr(g, 'stock_list_done', False):
         log.info("选股尚未完成，跳过买入")
         return
@@ -2616,7 +2576,7 @@ def buy(context):
     if g.is_empty:
         return
 
-    # 设置买入打板模式的优先级配置，便于手动调整
+    # g.priority_config 决定多个模式同时入选时，谁排在前面
     log.info(f"trend:{g.trade_stats['market_stats']},g.priority_config:{g.priority_config}")
 
     # ========== 关键修改6：更新优先级配置为策略2的配置 ==========
@@ -2633,7 +2593,7 @@ def buy(context):
         else:
             g.priority_config = ['lb', 'rzq', 'yje', 'fxsbdk', 'dk']
 
-    # 检查是否需要进行买入交易的条件判断
+    # 这些时间变量后面会反复用到，先统一算好
     current_weekday = context.current_dt.weekday()
     current_time_str = str(context.current_dt)[-8:]
     current_date = context.current_dt.date()
@@ -2646,7 +2606,7 @@ def buy(context):
         log.info(f'当前为周{current_weekday + 1} 14:50，不执行买入')
         return
 
-    # 初始化交易记录全局变量
+    # 交易记录会在买卖两端持续补充，方便盘后复盘
     if not hasattr(g, 'trade_records'):
         g.trade_records = {}
 
@@ -2660,7 +2620,7 @@ def buy(context):
     if not hasattr(g, 'today_trades'):
         g.today_trades = []
 
-    # 初始化各类型股票列表（按优先级顺序定义）
+    # 这些列表会在下面逐段填充，最后汇总进评分与排序流程
     lblt_stocks = []  # 连板龙头
     rzq_stocks = []  # 弱转强
     gk_stocks = []  # 一进二
@@ -3047,17 +3007,18 @@ def buy(context):
         g.dk_stocks = dk_stocks
         g.fxsbdk_stocks = fxsbdk_stocks
 
-        # 按优先级合并五大策略候选股（去重，保留首次出现的策略优先级）
-        # 同一只股票可能同时满足多个策略，以第一次出现时的策略为准
+        # 按优先级合并股票列表（去重，保留首次出现顺序）
         qualified_stocks = []
+        # 创建优先级列表映射，便于根据配置动态调整顺序
         priority_lists = {
-            "lb": lblt_stocks,    # 连板龙头
-            "yje": gk_stocks,     # 一进二
-            "rzq": rzq_stocks,    # 弱转强
-            "dk": dk_stocks,      # 首板低开
+            "lb": lblt_stocks,  # 连板龙头
+            "yje": gk_stocks,  # 一进二
+            "rzq": rzq_stocks,  # 弱转强
+            "dk": dk_stocks,  # 首板低开
             "fxsbdk": fxsbdk_stocks  # 反向首板低开
         }
 
+        # 按优先级配置合并股票列表
         seen = set()
         for priority_type in g.priority_config:
             stock_list = priority_lists.get(priority_type, [])
@@ -3283,20 +3244,22 @@ def buy(context):
 
 def classify_broken_type(open_price, close_price, high_price, low_price, high_limit, change_pct):
     """
-    判断断板类型（用于识别不同质量的断板龙头）。
+    判断断板属于哪一类。
 
-    【断板是什么】
-    连板股票在某天没有封住涨停（收盘未达涨停价），称为"断板"。
-    断板类型决定了该股票后续的做多价值：
+    目的不是为了“好看地命名”，而是为了区分强弱：
+    - 有些断板说明资金还很强，只是没封住；
+    - 有些断板说明已经明显走弱，后续参与价值不高。
 
-    分类标准（按强弱排序）：
-    - 一字炸板-强势  ：开盘涨停，盘中炸板，收盘涨5%以上（多空最激烈，仍有做多价值）
-    - 冲高回落-强势  ：盘中打到涨停但没封住，收盘涨5%以上
-    - 低开反抽-强势  ：低开后反弹，收盘涨5%以上（空方开盘打压，多方反包，强势）
-    - 低开反抽-弱势  ：低开后反弹，收盘小涨（有一定支撑）
-    - 高开低走/直接跌停 ：弱势断板，通常不再追（买入风险高）
+    参数：
+        open_price: 开盘价
+        close_price: 收盘价
+        high_price: 最高价
+        low_price: 最低价
+        high_limit: 涨停价
+        change_pct: 涨跌幅（百分比）
 
-    priority_types 列表中的类型会被识别为优质断板龙头放入弱转强候选
+    返回：
+        str: 断板类型
     """
     try:
         # 判断是否触及涨停价（允许0.1%误差）
@@ -3369,14 +3332,14 @@ from datetime import datetime  # 只导入 datetime 类，不导入 time
 
 def check_volume_for_buy(stock, context, current_data):
     """
-    买入前量能过滤：当日累计成交量不能超过昨日成交量的1.15倍。
+    买入前的量能判断（简化版）
+    条件：当日累计成交量 <= 昨日成交量 * 1.15
+    说明：直接使用实时累计成交量，不再估算全天，避免早盘放大误差
 
-    【目的】
-    如果今日到当前时刻的累计成交量已经超过昨日全天的1.15倍，
-    说明成交异常活跃（可能是主力大量出货），此时买入风险较高，跳过。
-
-    【注意】
-    直接用实时累计量比对，不估算全天量，避免早盘前30分钟成交集中导致估算偏高误过滤
+    小白可以这样理解：
+    这一步是在防“突然爆量但价格未必健康”的票。
+    如果今天到当前时刻的成交量已经远超昨天，可能是情绪过热，也可能是出货，
+    所以这里先保守一点，不急着追。
     """
     try:
         # 1. 基础数据检查
@@ -3491,19 +3454,16 @@ def is_above_ma5(stock, context):
 
 def execute_buy(context, isFiltered=False, custom_stocks=None):
     """
-    实际下单买入函数（被 buy_after_auction_filter 和每5分钟定时任务调用）
+    公共买入执行函数。
 
-    参数说明：
-        isFiltered   : True  = 由 buy_after_auction_filter 调用（已经过内外比过滤），跳过实时技术指标检查
-                       False = 由定时任务直接调用，需要额外检查同花顺趋势信号 + 量能
-        custom_stocks: 指定买入股票列表（内外比过滤后传入），为 None 时用 g.qualified_stocks
+    这里才是真正负责“下单”的地方。
 
-    买入流程：
-        1. 过滤已涨停/已持仓股票
-        2. isFiltered=False 时额外检查：同花顺趋势=红（上升）、无波段卖信号、价格在MA5上方、量能不超标
-        3. 按策略优先级+评分排序
-        4. 计算每只股票分配金额（总资产*0.95 / 买入数量，取min防超资金）
-        5. 以市价单（MarketOrderStyle）下单，用 order_result.amount 作为实际股数记录
+    参数:
+        isFiltered:
+            True  表示由 buy() 主动触发，此时更像正式建仓。
+            False 表示由定时任务触发，此时会额外检查实时技术信号。
+        custom_stocks:
+            可选的临时股票池；不传时默认使用 g.qualified_stocks。
     """
     # 空仓检查
     if getattr(g, 'is_empty', False):
@@ -3518,8 +3478,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
     if context.current_dt.weekday() == 4 and not isFiltered:
         return
 
-    candidate_pool = custom_stocks
-    # 确定候选股票池
+    # 确定本次下单的股票池来源
     if custom_stocks is not None:
         candidate_pool = custom_stocks
     else:
@@ -3544,7 +3503,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
         # log.debug(f"已达最大持仓限制{g.position_limit}，不执行买入")
         return
 
-    # 持股市值占比超过85%时不再买入（防止极端情况下资金不足导致下单失败）
+    # 检查持股仓位比例，超过85%不买入
     total_value = context.portfolio.total_value
     positions_value = context.portfolio.positions_value
     position_ratio = positions_value / total_value if total_value > 0 else 0
@@ -3552,7 +3511,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
         log.debug(f"持股仓位已达{position_ratio:.2%}，超过85%阈值，跳过买入")
         return
 
-    # ========== 构建本次买入候选列表 ==========
+    # 这里做“下单前最后一轮过滤”，只保留当前这一刻依然值得买的票
     current_buy_candidates = []
     # 使用原始的合格股票池（早盘筛选结果），不修改全局变量
     for s in candidate_pool:
@@ -3571,20 +3530,20 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
             log.info(f"❌ {s} 当前价格涨停，跳过买入")
             continue
 
-        # ----- 2. 技术指标检查（仅定时任务调用时才做，内外比过滤后已确认方向则跳过）-----
-        if not isFiltered:
-            # 同花顺ZIG指标：trend_color='red' 表示买线在卖线上方（上升趋势），才允许买入
+        # ----- 2. 技术指标检查（仅定时任务）-----
+        # 盘中定时任务需要再检查一次实时信号，
+        # 避免早盘入选、盘中走坏的股票被误买。
+        if not isFiltered:  # 定时任务需要实时技术指标
+            # 同花顺指标判断
             ths_signals = calculate_ths_indicators(s, context, 120, '5m')
             if ths_signals['trend_color'] != 'red':
                 continue
-            # 最近2根K线内出现波段卖信号，说明趋势刚刚转弱，跳过
             if ths_signals['last_signal_type'] == '波段卖' and ths_signals['last_signal_offset'] <= 2:
                 continue
-            # 价格必须在5日均线上方（不买均线下方弱势票）
             if not is_above_ma5(s, context):
                 continue
 
-            # 量能检测：当日累计成交量不超过昨日的1.15倍（防止追涨超量出货股）
+            # 量能检测
             if not check_volume_for_buy(s, context, current_data):
                 continue
 
@@ -3619,7 +3578,8 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
         log.info("无可买入股票或仓位已满")
         return
 
-    # 计算每只股票买入金额
+    # 资金分配思路：
+    # 先按可用仓位平分，再和当前可用现金比较，取更保守的金额。
     # 用聚宽自己的总资产等分，不感知QMT充值；total_value只会因交易盈亏变化
     # 保留cash_reserve_ratio作为缓冲，防止QMT执行时价格小幅上涨不够买
     target_per_position = context.portfolio.total_value * (1 - g.cash_reserve_ratio) / buy_count
@@ -3697,13 +3657,23 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
 
 def sort_stocks_by_priority(qualified_stocks, lblt_stocks, gk_stocks, rzq_stocks, dk_stocks, fxsbdk_stocks):
     """
-    对候选股票按"策略优先级 + 评分"排序，取前 position_limit 只。
+    按“策略模式优先级 + 个股评分”双重规则排序。
 
-    排序规则：
-    1. 策略优先级：由 g.priority_config 决定（如 lb > rzq > yje > ...）
-    2. 同一策略内：按综合评分（g.score_cache 里的 total_score）降序
+    简单理解：
+    - 先看股票属于哪个模式；
+    - 模式之间按 g.priority_config 排序；
+    - 同一个模式里，再按评分高低排序。
 
-    返回排序后的股票代码列表（最多 position_limit 只）
+    参数:
+        qualified_stocks: 符合条件的股票列表
+        lblt_stocks: 连板龙头股票列表
+        gk_stocks: 一进二股票列表
+        rzq_stocks: 弱转强股票列表
+        dk_stocks: 首板低开股票列表
+        fxsbdk_stocks: 反向首板低开股票列表
+
+    返回:
+        排序后的股票列表
     """
     try:
         # ========== 1. 创建模式优先级映射 ==========
@@ -3716,7 +3686,8 @@ def sort_stocks_by_priority(qualified_stocks, lblt_stocks, gk_stocks, rzq_stocks
         log.info(f"📋 当前策略优先级: {' > '.join(g.priority_config)}")
 
         # ========== 2. 创建股票到模式的映射（按优先级顺序） ==========
-        # 关键修改：按照 g.priority_config 的顺序映射，优先级高的模式优先
+        # 一只股票可能同时落入多个模式。
+        # 这里让“高优先级模式”覆盖低优先级模式。
         stock_pattern_map = {}
 
         # 定义模式到股票列表的映射
@@ -3827,14 +3798,17 @@ def sort_stocks_by_priority(qualified_stocks, lblt_stocks, gk_stocks, rzq_stocks
 
 def get_volume_data(stock_code, context=None):
     """
-    获取股票量能比（昨日 / 前日成交量之比），带当日缓存避免重复调用。
+    获取股票的量能数据（最近两天成交量及量能比），带缓存功能
 
-    【量能比含义】
-    量能比 = 昨日成交量 / 前日成交量
-    - 量能比 > 1：昨日比前日放量，市场活跃度提升
-    - 量能比 < 1：昨日比前日缩量，活跃度下降
+    Args:
+        stock_code: 股票代码（如'603533.XSHG'）
+        context: 上下文对象，用于获取当前日期，默认为None
 
-    返回: (昨日成交量, 前日成交量, 量能比)
+    Returns:
+        tuple: (last_volume, last_2_volume, trade_volume_ra)
+            last_volume: 最近一个交易日的成交量
+            last_2_volume: 倒数第二个交易日的成交量
+            trade_volume_ra: 量能比（last_volume / last_2_volume），若数据不足或除零则为None
     """
     # 初始化返回值
     last_volume = None
@@ -3903,9 +3877,17 @@ def get_volume_data(stock_code, context=None):
 
 def optimize_friday_trading_logic(context, qualified_stocks):
     """
-    优化后的周五尾盘买入判断逻辑
-    使用缓存的评分结果，避免重复计算，新增条件：个股当日开盘价较现价高2%以上
-    适配修改：1. 补全get_volume_data的context参数 2. 对get_buy_reason返回值做健壮性兜底 3. 增强相关日志
+    周五尾盘专用买入过滤。
+
+    为什么要单独做周五逻辑：
+    周五买入后要跨周末，消息面和不确定性更高，所以条件通常更苛刻。
+
+    这里会额外检查：
+    - 分数是否够；
+    - 量能是否健康；
+    - 市场环境是否太差；
+    - 当前价是否站在 MA5 上方；
+    - 开盘价是否明显高于现价（说明当天有回落，可能给出更低吸的位置）。
     """
     # 获取市场环境数据
     market_stats = g.trade_stats.get('market_stats', {})
@@ -4051,10 +4033,16 @@ def clear_score_cache(context):
 
 def calculate_buy_score_optimized(stock, context, money_flow_map):
     """
-    计算单只股票的六因子买入评分，返回各因子得分字典。
+    计算单只股票的 6 因子总分。
 
-    money_flow_map: 预先批量查询的主力资金数据字典（避免循环内逐只调用API）
-    返回: {'factor1_涨停': x, 'factor2_技术': x, ..., 'factor6_主力资金': x}
+    这是“单票评分器”。
+    filter_stocks_by_score_optimized 会循环调用它，给每只候选股打分。
+
+    计算流程：
+    1. 取历史行情数据；
+    2. 对齐资金流日期和收盘价日期；
+    3. 分别计算 6 个因子分；
+    4. 汇总成总分，并写入 g.score_cache。
     """
     try:
         # 1. 获取基础历史数据（含收盘价）
@@ -4072,6 +4060,8 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
         has_money_data = len(fund_flow_list) >= 5
 
         # 3. 提取并对齐收盘价数据（与资金流日期匹配）
+        # 这一步的意义：
+        # 资金流数据和K线数据来源不同，先把日期对齐，再算资金因子才可靠。
         close_prices = []
         if not hist_data.empty and has_money_data:
             # 资金流日期列表（已排序）
@@ -4086,7 +4076,7 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
                     log.warning(f"{stock} 资金流日期 {date} 无对应收盘价数据")
                     close_prices.append(0)  # 填充默认值
 
-        # 4. 初始化因子得分
+        # 4. 初始化 6 个因子分
         factor1_score = 0
         factor2_score = 0
         factor3_score = 0
@@ -4094,7 +4084,8 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
         factor5_score = 0
         factor6_score = 0  # 主力资金因子
 
-        # 5. 计算各因子得分（严格异常隔离）
+        # 5. 分项计算
+        # 某一个因子报错时，不希望拖垮整只股票的总评分，所以这里尽量独立。
         factor1_score = calculate_limit_up_score_optimized(stock, context,
                                                            hist_data) if 'high_limit' in hist_data.columns else 0
         # TODO  一进二需要另外评估
@@ -4104,7 +4095,8 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
         factor4_score = calculate_mainline_score_optimized(stock, context)
         factor5_score = calculate_sentiment_score_optimized(stock, context)
 
-        # 6. 主力资金因子计算（传入对齐后的收盘价数据）
+        # 6. 主力资金因子
+        # 这是比较“重”的一项，因为它会判断资金流规模、占市值比例、以及资金模式。
         factor6_score = calculate_main_force_flow_score(stock, fund_flow_list, close_prices)
         if not has_money_data and factor6_score > 0:
             factor6_score = int(factor6_score * 0.6)  # 数据不全时降权
@@ -4115,7 +4107,8 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
             factor4_score, factor5_score, factor6_score
         ])
 
-        # 8. 缓存评分结果
+        # 8. 把结果先写入缓存。
+        # 后面排序、打印买入原因、日志排查都会用到这份缓存。
         g.score_cache[stock] = {
             'total_score': total_score,
             'factors': {
@@ -4177,14 +4170,22 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
 
 def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
     """
-    优化主力资金流入因子评分函数
-    统一大小市值评分标准，大幅提高资金模式权重，调整评分标准
+    计算“主力资金”因子分。
+
+    这一项想回答的问题是：
+    “最近几天主力资金到底有没有真正在做这只票，而且力度够不够强？”
+
+    它不是只看单日净流入，而是同时看三件事：
+    1. 资金占流通市值的比例；
+    2. 绝对流入规模有多大；
+    3. 近几天资金流的变化模式，是持续增强、突然爆发，还是弱转强。
+
     参数:
         stock: 股票代码
         fund_flow_list: 资金流字典列表（包含至少5天数据，需有'date'、'net_amount_main'字段）
         close_prices: 对应日期的收盘价列表（与fund_flow_list日期顺序一致）
     返回:
-        资金流评分（0-10分）
+        资金流评分（整数分，分数越高表示资金信号越强）
     """
     try:
         # 1. 增强输入数据校验
@@ -4221,6 +4222,7 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
         latest_date = hist_data['date'].iloc[-1]
 
         # 3. 提取关键数据
+        # recent_5d_main: 最近5天主力净流入序列，是后续模式判断的核心输入。
         recent_5d_main = hist_data['net_amount_main'].tail(5).values  # 近5日主力净流入
         latest_main = recent_5d_main[-1]  # 前一交易日（最新）净流入
         ma5_flow = recent_5d_main.mean()  # 近5日MA5净流入
@@ -4261,7 +4263,8 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
             circ_market_cap = None
             flow_to_market_ratio = None
 
-        # 5. 资金流入比例评分（0-10分）- 大幅调整评分标准，拉大差距
+        # 5. 比例评分：
+        # 把主力净流入和流通市值对比，判断这笔资金“相对公司盘子”算不算大。
         ratio_score = 0
         ratio_desc = "无比例数据"
 
@@ -4303,7 +4306,8 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
 
             ratio_desc = f"{ratio_level} ({flow_to_market_ratio * 100:.4f}%)"
 
-        # 6. 绝对资金规模评分（0-10分）
+        # 6. 绝对规模评分：
+        # 有些票盘子大，单看比例不够，还要看绝对金额够不够有存在感。
         absolute_score = 0
         if latest_main >= 50000:  # 5亿以上
             absolute_score = 10
@@ -4339,7 +4343,8 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
             absolute_score = 0
             absolute_desc = "负规模"
 
-        # 7. 资金模式评分 - 调整评分标准
+        # 7. 资金模式评分：
+        # 关注的是“资金行为形态”，比如连续流出后突然转强，或者持续增强。
         pattern_score = 0
 
         # 处理爆发倍数的显示
@@ -4371,7 +4376,7 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
             pattern_score = 4
             pattern_desc = f"温和增强（比前均值: {latest_main / prev_4d_avg:.2f}倍）"
 
-        # 8. 权重计算 - 大幅调整权重分配
+        # 8. 三部分加权合成最终分数
         ratio_weight = 0.40  # 资金流入比例权重提高到40%
         absolute_weight = 0.20  # 绝对资金规模权重提高到20%
         pattern_weight = 0.40  # 资金模式权重降低到40%
@@ -4427,7 +4432,11 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
 
 def calculate_limit_up_score_optimized(stock, context, hist_data=None):
     """
-    优化后的涨停评分计算函数（含000559特殊日志，修复价格记录获取错误）
+    计算“涨停强度”因子分。
+
+    核心思想：
+    昨天如果是强势涨停，或者非常接近涨停，同时成交量也配合，
+    说明这只票有较强的短线攻击性。
 
     参数:
     stock: 股票代码
@@ -4450,7 +4459,7 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
 
         score = 0
 
-        # 1. 检查昨日是否涨停 (0-3分)
+        # 1. 价格强度：看昨天是否真正封涨停，或者至少非常接近涨停
         # 关键修复：使用iloc[-1]获取最后一条数据（实际昨日数据）
         yesterday_close = hist_data['close'].iloc[-1]
         yesterday_high_limit = hist_data['high_limit'].iloc[-1]
@@ -4484,7 +4493,7 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
                 log_msg = f"{stock} 昨日收盘价接近涨停（{yesterday_close:.2f}/{yesterday_high_limit:.2f}），+1分"
                 log.debug(log_msg)
 
-        # 2. 检查涨停质量 (0-2分)
+        # 2. 量能质量：同样是涨停，放量涨停通常比缩量涨停更有辨识度
         yesterday_volume = hist_data['volume'].iloc[-1]  # 修复：昨日成交量取最后一条
         # 计算昨日之前的平均成交量（排除昨日）
         prev_volumes = hist_data['volume'].iloc[:-1]  # 取截止到昨日之前的所有成交量
@@ -4515,8 +4524,14 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
 
 def calculate_technical_score_optimized(stock, context, hist_data=None):
     """
-    优化后的技术评分计算函数，新增近10日涨停数统计
-    总分范围：0-10分（原技术分0-5分 + 涨停活跃度分0-5分）
+    计算“技术形态”因子分。
+
+    这部分主要看三件事：
+    1. 近10日涨停活跃度；
+    2. 均线结构是否偏强；
+    3. RSI 和价格区间位置是否健康。
+
+    总分范围：0-10分。
     """
     try:
         # 1. 获取历史数据（补充涨停价字段用于判断涨停）
@@ -4533,7 +4548,8 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
         score = 0
         close_prices = hist_data['close']
 
-        # 2. 新增：近10个交易日涨停数统计（股性活跃度评分 0-5分）
+        # 2. 近10日涨停数
+        # 这里更像是在看“股性是否活跃”，而不是看单日走势。
         # 取最近10个交易日数据（含当日）
         recent_10d = hist_data.tail(10)
         # 过滤无效数据（涨停价为0或NaN的情况）
@@ -4557,7 +4573,8 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
         log.debug(f"{stock} 近10日涨停数: {limit_up_count}，活跃度得分: {limit_up_score}")
         score += limit_up_score  # 加入总评分
 
-        # 3. 原有MA均线系统评分（0-2分）
+        # 3. 均线结构
+        # 多头排列通常表示趋势更顺。
         if len(close_prices) >= 20:
             ma5 = close_prices.rolling(window=5).mean().iloc[-1]
             ma10 = close_prices.rolling(window=10).mean().iloc[-1]
@@ -4574,7 +4591,8 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
             else:
                 log.debug(f"{stock} 非多头排列，均线得0分")
 
-        # 4. 原有RSI指标评分（0-2分）
+        # 4. RSI
+        # 不是越高越好，太高太低都可能意味着位置不舒服。
         if len(close_prices) >= 14:
             rsi = calculate_rsi(close_prices, 14)
             rsi_score = 0
@@ -4585,7 +4603,8 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
             score += rsi_score
             log.debug(f"{stock} RSI({rsi:.1f})得分: {rsi_score}")
 
-        # 5. 原有价格位置评分（0-1分）
+        # 5. 价格区间位置
+        # 当前价处于20日区间上半部，说明相对更强。
         if len(hist_data) >= 20:
             high_20 = hist_data['high'].tail(20).max()
             low_20 = hist_data['low'].tail(20).min()
@@ -4625,7 +4644,11 @@ def calculate_rsi(prices, period=14):
 
 def calculate_volume_ma_score_optimized(stock, context, hist_data=None):
     """
-    修复后的放量+MA5上穿评分计算
+    计算“量价配合”因子分。
+
+    关注两类信号：
+    1. 价格是否站上/走强于短均线；
+    2. 最近成交量是否明显高于过去平均水平。
     """
     try:
         # 如果没有提供历史数据，则获取
@@ -4641,7 +4664,7 @@ def calculate_volume_ma_score_optimized(stock, context, hist_data=None):
         close_prices = hist_data['close']
         volume_data = hist_data['volume']
 
-        # 1. MA5上穿检查（0-3分）
+        # 1. 均线突破信号
         if len(close_prices) >= 10:
             ma5_current = close_prices.rolling(window=5).mean().iloc[-1]
             ma5_yesterday = close_prices.rolling(window=5).mean().iloc[-2]
@@ -4658,7 +4681,8 @@ def calculate_volume_ma_score_optimized(stock, context, hist_data=None):
             if ma5_current > ma10_current and ma5_yesterday <= ma10_current:
                 score += 1
 
-        # 2. 放量确认（0-2分）
+        # 2. 放量确认
+        # 有价还要有量，量能配合越明显，分越高。
         if len(volume_data) >= 5:
             recent_volume = volume_data.tail(3).mean()
             historical_volume = volume_data.head(-3).mean()
@@ -4793,8 +4817,13 @@ def record_closing_stats(context):
 # 5. 辅助函数
 def get_buy_reason(stock, context):
     """
-    获取股票的买入原因（优化版）
-    核心修改：判断依据从「原始池」改为「buy代码筛选后的全局最终池」，与排序/日志逻辑一致
+    返回股票属于哪一种买入模式。
+
+    这个函数不负责打分，只负责给结果贴标签。
+    主要用途有两个：
+    1. 买入日志里告诉你“为什么买它”；
+    2. 某些场景下，按模式区分不同阈值。
+
     参数:
     stock: 股票代码
     context: 上下文对象
@@ -4823,6 +4852,11 @@ def get_buy_reason(stock, context):
 
 # 处理日期相关函数
 def transform_date(date, date_type):
+    """
+    在字符串、datetime、date 三种日期格式之间转换。
+
+    这个函数本身不参与交易逻辑，只是为了让其它函数少写重复的日期转换代码。
+    """
     if type(date) == str:
         str_date = date
         dt_date = dt.datetime.strptime(date, '%Y-%m-%d')
@@ -4841,11 +4875,13 @@ def transform_date(date, date_type):
 
 # 过滤函数
 def filter_new_stock(initial_list, date, days=50):
+    """过滤上市时间太短的新股，避免样本太新、波动过大。"""
     d_date = transform_date(date, 'd')
     return [stock for stock in initial_list if d_date - get_security_info(stock).start_date > dt.timedelta(days=days)]
 
 
 def filter_st_paused_stock(initial_list):
+    """过滤 ST、停牌、退市整理类股票。"""
     current_data = get_current_data()
     # 使用列表推导式结合any()函数，筛选出符合条件的股票
     return [stock for stock in initial_list
@@ -4857,11 +4893,19 @@ def filter_st_paused_stock(initial_list):
 
 
 def filter_kcbj_stock(initial_list):
+    """只保留主板/创业板常见代码，排除科创板、北交所等不想参与的市场。"""
     return [stock for stock in initial_list if stock[:2] in ('60', '00', '30')]
 
 
 # 每日初始股票池
 def prepare_stock_list(date):
+    """
+    生成每日的基础股票池。
+
+    这是所有后续选股的最上游入口。
+    顺序上就是：
+    全市场股票 -> 去掉不想做的市场 -> 去掉新股 -> 去掉 ST/停牌/退市风险股。
+    """
     initial_list = get_all_securities('stock', date).index.tolist()
     initial_list = filter_kcbj_stock(initial_list)
     initial_list = filter_new_stock(initial_list, date)
@@ -4870,6 +4914,15 @@ def prepare_stock_list(date):
 
 
 def rise_low_volume(s, context):  # 上涨时，未放量 rising on low volume
+    """
+    检查“左压”附近是否缩量。
+
+    通俗说：
+    如果股价正在靠近前高，但成交量没有异常放大，
+    说明抛压可能没那么重，向上突破时更干净。
+
+    这是一个偏辅助的形态判断函数。
+    """
     try:
         hist = attribute_history(s, 106, '1d', fields=['high', 'volume'], skip_paused=True, df=False)
         if hist is None or len(hist['high']) < 102:
@@ -4973,7 +5026,14 @@ def get_continue_count_df(hl_list, date, watch_days):
 
 
 def record_sell_trade(context, stock, reason, details, current_data, date):
-    """记录卖出交易并更新上一笔交易信息"""
+    """
+    记录一笔卖出交易。
+
+    它本身不负责卖出决策，只负责“记账”：
+    - 记下卖出原因；
+    - 计算这笔卖出的盈亏；
+    - 写入 g.today_trades，供盘后汇总使用。
+    """
     try:
         position = context.portfolio.positions[stock]
         avg_cost = position.avg_cost
@@ -5016,7 +5076,14 @@ ALLOWED_FIELDS = {
 
 def get_trading_time_status(context):
     """
-    获取当前交易时段状态
+    判断当前时间属于哪个时段。
+
+    返回三个布尔值：
+    - is_morning: 是否处于上午大时段
+    - is_afternoon: 是否处于下午大时段
+    - is_trading_time: 是否处于真正连续竞价时间
+
+    这个函数很基础，但很重要，因为很多买卖规则只在某个时间段生效。
     Args:
         context: 聚宽上下文对象
     Returns:
@@ -5051,7 +5118,14 @@ def get_trading_time_status(context):
 
 def get_5min_volume_ratio(stock, context, period=5):
     """
-    获取当前5分钟K线成交量与过去period根5分钟K线平均成交量的比值
+    计算 5 分钟量比。
+
+    公式很简单：
+    当前这一根 5 分钟K线成交量 / 过去 period 根 5 分钟K线平均成交量
+
+    作用：
+    用来判断这只股票此刻是不是突然放量。
+
     参数:
         stock: 股票代码
         context: 聚宽上下文
@@ -5095,8 +5169,10 @@ def get_5min_volume_ratio(stock, context, period=5):
 
 def get_1min_volume_ratio(stock, context, period=5):
     """
-    获取当前1分钟K线成交量与过去period根1分钟K线平均成交量的比值
-    用于早盘09:32调仓，5m K线此时是昨日数据不适合
+    计算 1 分钟量比。
+
+    和 get_5min_volume_ratio 思路一样，只是换成 1 分钟粒度。
+    主要用于 09:32 这种非常早的时点，因为这时 5 分钟K线还不够灵敏。
     """
     try:
         bars = get_bars(
@@ -5125,9 +5201,15 @@ def get_1min_volume_ratio(stock, context, period=5):
 # ================== 主卖出逻辑 ==================
 def sell2(context):
     """
-    卖出策略优化版本
-    包含上午和下午不同的卖出逻辑
-    详细记录卖出信息
+    主卖出函数。
+
+    这是整份脚本里最复杂的函数之一，因为它把多套卖出逻辑放在一起：
+    1. 上午偏风控，处理止损、走弱、放量异常；
+    2. 下午偏止盈，尤其关注 14:50 左右的尾盘量能；
+    3. 全程记录卖出原因，方便复盘。
+
+    第一次阅读时，建议先抓主线：
+    “先按上午/下午分支，再看每个时间段有哪些触发条件”。
     """
     # 初始化交易记录
     if not hasattr(g, 'today_trades'):
@@ -5149,7 +5231,8 @@ def sell2(context):
     # 判断当前时间段
     is_morning, is_afternoon, is_trading_time = get_trading_time_status(context)
 
-    # ========== 性能优化：批量预取4日历史数据，替代循环内逐股 attribute_history ==========
+    # 性能优化：
+    # 先批量拉取持仓股历史数据，避免在循环里一只只查，减少 API 调用次数。
     slist = [s for s in context.portfolio.positions if context.portfolio.positions[s].closeable_amount > 0]
     hist_map = {}
     if slist:
