@@ -3,6 +3,8 @@
 # 增加资金监控不动qmt账户外来资金
 # 增加deepseek概念映射
 # 增加5%缓冲资金防止股价上涨买不到票
+# 增加小白注释
+# 减少log信息
 # ============================================================================
 # 打板策略 v2.2.0
 # 基于之前版本的策略 完整重构买点模型
@@ -39,7 +41,6 @@ from datetime import datetime, timedelta
 import math
 import gc
 
-
 # 导入自定义SQL交易函数
 from myqmt_sql import (
     order_zzy as order,
@@ -47,6 +48,7 @@ from myqmt_sql import (
     order_value_zzy as order_value,
     order_target_value_zzy as order_target_value
 )
+
 # ============================================================================
 # 引入同花顺热点概念公用函数
 # ========================================================================
@@ -108,7 +110,7 @@ def initialize(context):
     3. 注册全天要自动执行的任务。
     """
     set_option('use_real_price', True)
-    log.set_level('system', 'error')
+#     log.set_level('system', 'error')
     set_option('avoid_future_data', True)
 
     g.is_empty = False
@@ -162,7 +164,7 @@ def initialize(context):
     # ===== 热点概念模块全局设置 =====
     from test_hot_concept_utils import set_g, set_logger, set_deepseek_api_key
     set_g(g)
-    set_logger(log)
+#     set_logger(log)
     set_deepseek_api_key("sk-db2d0d33cf4747d5bae53ecb21de49ad")  # TODO: 替换为你的真实 DeepSeek API Key
 
     # ===== 定时任务总表 =====
@@ -252,7 +254,8 @@ def update_strategy_priority(trend):
         'trend': trend,
         'priority': g.priority_config
     }
-    log.info(f"根据市场趋势 [{trend}] 更新策略优先级: {' > '.join(g.priority_config)}")
+    # log.info(f"策略优先级已更新: {trend} -> {' > '.join(g.priority_config)}")
+#     log.info(f"根据市场趋势 [{trend}] 更新策略优先级: {' > '.join(g.priority_config)}")
 
 
 def log_daily_trades(context):
@@ -262,30 +265,30 @@ def log_daily_trades(context):
     try:
         if not hasattr(g, 'today_trades'):
             log.info("今日无交易")
+#             log.info("今日无交易")
             return
-
-        log.info("\n==== 今日交易总结 ====")
 
         # 统计交易情况
         total_trades = len(g.today_trades)
+        if total_trades == 0:
+            log.info("今日无交易")
+#             log.info("今日无交易")
+            return
         buy_trades = [trade for trade in g.today_trades if trade['action'] == '买入']
         sell_trades = [trade for trade in g.today_trades if trade['action'] == '卖出']
-
-        log.info(f"总交易数: {total_trades}")
-        log.info(f"买入交易: {len(buy_trades)}")
-        log.info(f"卖出交易: {len(sell_trades)}")
 
         # 计算总体盈亏
         total_profit_pct = sum(trade.get('profit_pct', 0) for trade in sell_trades) / len(
             sell_trades) if sell_trades else 0
-        log.info(f"平均盈亏: {total_profit_pct:.2%}")
-
-        # 详细交易记录
-        for trade in g.today_trades:
-            log.info(
-                f"{trade['stock']} - {trade['action']} - 价格: {trade['price']:.2f} - 原因: {trade.get('reason', '无')}")
-
-        log.info("==== 交易总结结束 ====\n")
+        trade_summary = [f"{trade['stock']}{trade['action']}" for trade in g.today_trades]
+        log.info(
+            f"交易结果: 总计{total_trades}笔, 买入{len(buy_trades)}笔, 卖出{len(sell_trades)}笔, "
+            f"平均盈亏{total_profit_pct:.2%}, 明细: {', '.join(trade_summary)}"
+        )
+#         log.info(
+#             f"交易结果：总{total_trades}笔，买入{len(buy_trades)}笔，卖出{len(sell_trades)}笔，"
+#             f"平均盈亏{total_profit_pct:.2%}，明细：{', '.join(trade_summary)}"
+#         )
 
         # 重置今日交易记录
         g.today_trades = []
@@ -300,13 +303,15 @@ def log_daily_trades(context):
         g.gk_stocks = []
         g.dk_stocks = []
         g.stock_list_done = False
+        return
 
     except Exception as e:
-        log.error(f"记录每日交易日志失败: {str(e)}")
+#         log.error(f"记录每日交易日志失败: {str(e)}")
 
 
 # ==================== 内存管理 ====================
 
+        pass
 def daily_garbage_collection(context):
     """每日盘后强制清除缓存与垃圾回收，防止 OOM 崩溃"""
     if hasattr(g, 'volume_data_cache'):
@@ -352,7 +357,7 @@ def _compute_inside_outside_ratio(stock, end_dt, tick_count=300):
         ratio = round(buy_vol / sell_vol, 3)
         return round(buy_vol, 1), round(sell_vol, 1), ratio
     except Exception as e:
-        log.warning(f"{stock} 计算内外比失败: {e}")
+#         log.warning(f"{stock} 计算内外比失败: {e}")
         return 0, 0, 0.0
 
 
@@ -373,7 +378,7 @@ def sell_for_rebalance(context):
         pass
 
     if not hasattr(g, 'qualified_stocks') or not g.qualified_stocks:
-        log.debug("【早盘调仓】候选池为空，无需腾仓位")
+#         log.debug("【早盘调仓】候选池为空，无需腾仓位")
         return
 
     current_data = get_current_data()
@@ -404,10 +409,12 @@ def sell_for_rebalance(context):
             if vol_ratio is not None and vol_ratio > morning_threshold and cost_profit_pct < 0.05:
                 stock_profits.append((stock, day_gain_pct))
             else:
-                log.debug(f"【早盘调仓】{stock} 日涨幅{day_gain_pct:.1%}<5% 量比{vol_ratio} 不满足卖出")
+#                 log.debug(f"【早盘调仓】{stock} 日涨幅{day_gain_pct:.1%}<5% 量比{vol_ratio} 不满足卖出")
+                pass
         elif day_gain_pct >= 0.05 and vol_ratio is not None and vol_ratio > 28:
             stock_profits.append((stock, day_gain_pct))
-            log.info(f"【早盘调仓-天量止盈】{stock} 日涨幅{day_gain_pct:.1%} 量比={vol_ratio:.2f}>28 → 卖出")
+            log.info(f"早盘调仓-天量止盈: {stock}, 日涨幅{day_gain_pct:.1%}, 量比={vol_ratio:.2f}")
+#             log.info(f"【早盘调仓-天量止盈】{stock} 日涨幅{day_gain_pct:.1%} 量比={vol_ratio:.2f}>28 → 卖出")
 
     if not stock_profits:
         return
@@ -417,7 +424,8 @@ def sell_for_rebalance(context):
     stocks_to_sell = [s for s, _ in stock_profits[:needed]]
 
     for stock in stocks_to_sell:
-        log.info(f"【早盘调仓-放量卖出】{stock} 盈利不足5%且量能放大，卖出以腾仓位")
+        log.info(f"早盘调仓-放量卖出: {stock}, 盈利不足5%且量能放大, 卖出腾仓")
+#         log.info(f"【早盘调仓-放量卖出】{stock} 盈利不足5%且量能放大，卖出以腾仓位")
         order_target_value(stock, 0)
 
 
@@ -437,12 +445,12 @@ def buy_after_auction_filter(context, use_deferred=False):
         source = list(getattr(g, '_deferred_buy_stocks', []))
         tick_count = 500
         if not source:
-            log.debug(f"【内外比{tag}】无被拒股票，跳过")
+#             log.debug(f"【内外比{tag}】无被拒股票，跳过")
             return
     else:
         tag = "过滤"
         if not hasattr(g, 'qualified_stocks') or not g.qualified_stocks:
-            log.info(f"【内外比{tag}】候选池为空，跳过")
+#             log.info(f"【内外比{tag}】候选池为空，跳过")
             return
         source = list(g.qualified_stocks)
         tick_count = 300
@@ -455,11 +463,11 @@ def buy_after_auction_filter(context, use_deferred=False):
                       and s not in context.portfolio.positions]
 
     if not candidate_pool:
-        log.info(f"【内外比{tag}】候选全部涨停/已持仓/不在行情中，跳过")
+#         log.info(f"【内外比{tag}】候选全部涨停/已持仓/不在行情中，跳过")
         g._deferred_buy_stocks = []
         return
 
-    log.info(f"【内外比{tag}】开始计算 {len(candidate_pool)} 只候选股的内外比...")
+#     log.info(f"【内外比{tag}】开始计算 {len(candidate_pool)} 只候选股的内外比...")
     passed, rejected = [], []
     current_dt = context.current_dt
 
@@ -467,18 +475,18 @@ def buy_after_auction_filter(context, use_deferred=False):
         buy_vol, sell_vol, ratio = _compute_inside_outside_ratio(stock, end_dt=current_dt, tick_count=tick_count)
         if ratio >= 1.0 or (buy_vol == 0 and sell_vol == 0):
             passed.append(stock)
-            log.debug(f"  ✓ {stock} 外盘={buy_vol} 内盘={sell_vol} 内外比={ratio:.3f} → 通过")
+#             log.debug(f"  ✓ {stock} 外盘={buy_vol} 内盘={sell_vol} 内外比={ratio:.3f} → 通过")
         else:
             rejected.append(stock)
-            log.info(f"  ✗ {stock} 外盘={buy_vol} 内盘={sell_vol} 内外比={ratio:.3f} → 拒绝")
+#             log.info(f"  ✗ {stock} 外盘={buy_vol} 内盘={sell_vol} 内外比={ratio:.3f} → 拒绝")
 
-    log.info(f"【内外比{tag}】通过{len(passed)}只 / 拒绝{len(rejected)}只")
+#     log.info(f"【内外比{tag}】通过{len(passed)}只 / 拒绝{len(rejected)}只")
 
     if not use_deferred:
         g._deferred_buy_stocks = list(rejected)
 
     if not passed:
-        log.info(f"【内外比{tag}】无候选通过，今日不买入" + ("" if use_deferred else "（被拒股票将09:40二次确认）"))
+#         log.info(f"【内外比{tag}】无候选通过，今日不买入" + ("" if use_deferred else "（被拒股票将09:40二次确认）"))
         return
 
     execute_buy(context, isFiltered=True, custom_stocks=passed)
@@ -532,24 +540,17 @@ def calculate_mainline_score_optimized(stock, context):
         hot_concepts_list = [concept['name'] for concept in hot_concepts_result['all_concepts']]
         hot_concepts_set = set(hot_concepts_list)  # 转为集合提高查询效率
 
-        print(hot_concepts_set)
-        log.info(f"==== 主线评分计算 - 缓存检查 ====")
-        log.info(f"热门概念数量: {len(hot_concepts_set)}")
-        log.info(f"部分热门概念示例: {list(hot_concepts_set)[:10]}...")
-
         if not hot_concepts_set:
-            log.warning("热门概念列表为空，无法计算主线评分")
+#             log.warning("热门概念列表为空，无法计算主线评分")
             return 0
 
         # 获取股票所属概念（提取概念名称，转为字符串列表）
         stock_info = get_security_info(stock)
         if not stock_info or not stock_info.concepts:
-            log.info(f"股票 {stock} 无所属概念")
             return 0
 
         # 从概念字典中提取'name'字段，得到字符串列表
         stock_concepts = [concept['name'] for concept in stock_info.concepts]
-        log.info(f"股票 {stock} 所属概念名称: {stock_concepts}")
 
         # 主线分按“命中的热门概念个数”来算，不重复计数
         matched_concepts = [c for c in stock_concepts if c in hot_concepts_set]
@@ -559,21 +560,12 @@ def calculate_mainline_score_optimized(stock, context):
         # 按匹配数量计算分数（1个概念得2分，数量越多分数越高）
         mainline_score = match_count * 2 if match_count > 0 else 0
 
-        # 输出评分日志
-        if match_count > 0:
-            log.info(f"股票 {stock} 命中热门概念: {unique_matched} "
-                     f"({len(stock_concepts)}个所属概念中有{match_count}个命中今日热门), 主线评分: {mainline_score}")
-        else:
-            log.info(f"股票 {stock} 未命中热门概念 "
-                     f"(所属{len(stock_concepts)}个概念均不在今日{len(hot_concepts_set)}个热门概念中), 主线评分: 0")
-
-        log.info("----------------------------------------")
         return mainline_score
 
     except Exception as e:
-        log.error(f"计算主线评分时出错: {str(e)}")
+#         log.error(f"计算主线评分时出错: {str(e)}")
         import traceback
-        log.error(traceback.format_exc())
+#         log.error(traceback.format_exc())
         return 0
 
 
@@ -688,7 +680,15 @@ def get_industry_trend(stock, context, ma_short=5, ma_mid=20, ma_long=60):
             trend = 'down'
             trend_reason = '数据不足'
 
-        log.debug(f"  行业趋势(L2) {stock} [{industry_name}({industry_code})] "
+        stock_name = stock
+        try:
+            stock_info = get_security_info(stock)
+            if stock_info and getattr(stock_info, 'display_name', None):
+                stock_name = stock_info.display_name
+        except Exception:
+            pass
+
+        log.debug(f"  行业趋势(L2) {stock}({stock_name}) [{industry_name}({industry_code})] "
                   f"样本{len(price_arrays)}只 "
                   f"MA{ma_short}={ma5:.4f} MA{ma_mid}={ma20:.4f} MA{ma_long}={ma60_str}"
                   f" [{trend_reason}] → {trend}")
@@ -729,17 +729,17 @@ def filter_stocks_by_industry_trend(stocks, context):
             elif trend == 'momentum':
                 # 价格>MA20 或斜率衰减/底背离，下跌动能耗尽，视为反转信号放行
                 passed.append(stock)
-                log.info(f"  ~ {stock} 行业反转信号，放行")
+#                 log.info(f"  ~ {stock} 行业反转信号，放行")
             elif trend == 'unknown':
                 # 无法判断时放行，不误杀
                 passed.append(stock)
-                log.debug(f"  {stock} 行业趋势未知，放行")
+#                 log.debug(f"  {stock} 行业趋势未知，放行")
             else:
                 filtered_out.append(stock)
-                log.info(f"  ✗ {stock} 行业趋势={trend}，过滤")
+#                 log.info(f"  ✗ {stock} 行业趋势={trend}，过滤")
 
         except Exception as e:
-            log.warning(f"  filter_stocks_by_industry_trend({stock}) 异常: {e}，放行")
+#             log.warning(f"  filter_stocks_by_industry_trend({stock}) 异常: {e}，放行")
             passed.append(stock)
 
     return passed, filtered_out
@@ -769,9 +769,9 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
     总分高不代表一定入选，因为不同模式还有单独门槛，比如量比、主线分、资金分。
     """
     try:
-        log.info("=" * 60)
-        log.info(f"开始股票评分筛选，候选股票: {len(stocks)} 只，最低分数: {min_score}")
-        log.info("=" * 60)
+        # log.info("=" * 60)
+        # log.info(f"开始股票评分筛选，候选股票: {len(stocks)} 只，最低分数: {min_score}")
+        # log.info("=" * 60)
 
         # 获取各模式股票列表
         lblt_stocks = getattr(g, 'lblt_stocks', [])  # 连板龙头模式
@@ -820,23 +820,24 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
         # 限制处理数量
         limited_stocks = stocks[:max_stocks] if len(stocks) > max_stocks else stocks
         if len(stocks) > max_stocks:
-            log.info(f"⚠️  股票数量过多，限制处理前 {max_stocks} 只股票")
+            # log.info(f"⚠️  股票数量过多，限制处理前 {max_stocks} 只股票")
 
         # 检查缓存状态
+            pass
         cache_status = check_cache_status()
         processing_stats['cache_status'] = cache_status
-        log.info(f"热门概念缓存状态: {cache_status}")
+        # log.info(f"热门概念缓存状态: {cache_status}")
 
         # 预先获取热门概念（全局缓存，避免每只股票重复调用）
         g.hot_concepts_today = get_all_hot_concepts_optimized(context)
-        log.info(f"热门概念预加载完成，共 {len(g.hot_concepts_today.get('all_concepts', []))} 个概念")
+        # log.info(f"热门概念预加载完成，共 {len(g.hot_concepts_today.get('all_concepts', []))} 个概念")
 
         # 预先获取大盘数据（情绪评分缓存，避免每只股票重复调用）
         try:
             g.index_data_today = attribute_history('000001.XSHG', 5, '1d',
                                                    ['close', 'volume'], skip_paused=True)
         except Exception as e:
-            log.warning(f"预加载大盘数据失败: {e}")
+            # log.warning(f"预加载大盘数据失败: {e}")
             g.index_data_today = None
 
         # 批量获取股票基本信息
@@ -845,8 +846,8 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
         # ===== 前置过滤：行业趋势 =====
         g._industry_trend_cache = {}  # 每次选股重置行业缓存
         industry_passed, industry_filtered = filter_stocks_by_industry_trend(limited_stocks, context)
-        log.info(f"行业趋势过滤: {len(limited_stocks)} → {len(industry_passed)} 只通过，"
-                 f"{len(industry_filtered)} 只因行业下降/震荡被过滤")
+#         log.info(f"行业趋势过滤: {len(limited_stocks)} → {len(industry_passed)} 只通过，"
+#                  f"{len(industry_filtered)} 只因行业下降/震荡被过滤")
         if industry_filtered:
             filtered_names = []
             for s in industry_filtered[:10]:
@@ -854,7 +855,7 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                     filtered_names.append(get_current_data()[s].name if s in get_current_data() else s)
                 except Exception:
                     filtered_names.append(s)
-            log.info(f"  被过滤股票(前10): {filtered_names}")
+#             log.info(f"  被过滤股票(前10): {filtered_names}")
         limited_stocks = industry_passed
         processing_stats['total_stocks'] = len(limited_stocks)
         # ===== 前置过滤结束 =====
@@ -869,8 +870,6 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                     elapsed_time = time.time() - start_time
                     avg_time_per_stock = elapsed_time / i
                     remaining_time = avg_time_per_stock * (len(limited_stocks) - i)
-                    log.info(f"📊 进度: {i}/{len(limited_stocks)} ({i / len(limited_stocks) * 100:.1f}%), "
-                             f"预计剩余时间: {remaining_time:.1f}秒")
 
                 # 判断股票模式类型
                 is_lblt_stock = stock in lblt_stocks
@@ -894,7 +893,7 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                     stock_mode = "未分类"  # 默认为未分类模式
 
                 if stock_mode == "未分类":
-                    log.info(f"⛔ {stock} 无特定模式，过滤掉")
+                    # log.info(f"⛔ {stock} 无特定模式，过滤掉")
                     continue
 
                 # 1. 获取基础评分结果（包含全部6个因子，主力资金因子已统一计算）
@@ -999,7 +998,7 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                     # 获取股票的量比数据
                     last_volume, last_2_volume, volume_ratio = get_volume_data(stock, context)
 
-                    log.info(f"获取股票 {stock} 的量比数据: {volume_ratio}, is_lblt_stock:{is_lblt_stock}")
+                    # log.info(f"获取股票 {stock} 的量比数据: {volume_ratio}, is_lblt_stock:{is_lblt_stock}")
                     # 根据不同模式设置量比范围限制
                     if is_lblt_stock:
                         # 连板龙头模式量能比范围：1.0~10.5（策略2范围）
@@ -1028,10 +1027,11 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                     g.score_cache[stock]['volume_ratio'] = volume_ratio
 
                 except Exception as ve:
-                    log.warning(f"获取股票 {stock} 的量比数据失败: {str(ve)}")
+                    # log.warning(f"获取股票 {stock} 的量比数据失败: {str(ve)}")
 
                 # 第四层判断：按模式再看“总分区间”
                 # 有些模式不是分越高越好，而是要求落在特定区间里。
+                    pass
                 if is_qualified:
                     # 一进二模式总分范围：20~60分（策略2范围）
                     if is_first_to_second_stock and (total_score < 20 or total_score > 60):
@@ -1082,67 +1082,16 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
                 score_records.append(record)
 
                 # 8. 输出符合条件股票的详细信息（含6个因子）
-                if is_qualified:
-                    mode_tag = f"[{stock_mode}]" if stock_mode != "未分类" else ""
-                    volume_ratio_info = f"量比:{g.score_cache[stock].get('volume_ratio', '未知'):.2f}" if isinstance(
-                        g.score_cache[stock].get('volume_ratio'), (int, float)) else "量比:未知"
-                    log.info(f"✅ {stock} ({stock_name}){mode_tag} - 总分: {total_score} "
-                             f"[涨停:{factor1} 技术:{factor2} 放量MA:{factor3} "
-                             f"主线:{factor4} 情绪:{factor5} 主力资金:{factor6} {volume_ratio_info}]")
-                elif filtered_reason and total_score >= min_score:
-                    # 记录因过滤条件而被过滤的高分股票
-                    mode_tag = f"[{stock_mode}]" if stock_mode != "未分类" else ""
-                    volume_ratio_info = f"量比:{g.score_cache[stock].get('volume_ratio', '未知'):.2f}" if isinstance(
-                        g.score_cache[stock].get('volume_ratio'), (int, float)) else "量比:未知"
-                    log.info(f"⚠️ {stock} ({stock_name}){mode_tag} - 总分: {total_score} {filtered_reason} "
-                             f"[涨停:{factor1} 技术:{factor2} 放量MA:{factor3} "
-                             f"主线:{factor4} 情绪:{factor5} 主力资金:{factor6} {volume_ratio_info}]")
-
             except Exception as e:
                 processing_stats['failed_stocks'] += 1
-                log.error(f"处理股票 {stock} 时出错: {str(e)}")
+                # log.error(f"处理股票 {stock} 时出错: {str(e)}")
                 continue
 
         # 计算处理时间
         processing_stats['processing_time'] = time.time() - start_time
+        log.info(f"股票筛选完成: {len(qualified_stocks)}只")
 
-        # 输出统计信息
-        log.info("📈 评分分布统计:")
-        log.info(f"  🌟 高分股票(≥20分): {processing_stats['high_score_stocks']} 只")
-        log.info(f"  ⭐ 中等股票(15-20分): {processing_stats['medium_score_stocks']} 只")
-        log.info(f"  📊 低分股票(10-15分): {processing_stats['low_score_stocks']} 只")
-        log.info(f"  ❌ 零分股票(0分): {processing_stats['zero_score_stocks']} 只")
-
-        # 过滤统计
-        log.info("  🚫 过滤统计:")
-        if processing_stats['filtered_by_mainline'] > 0:
-            log.info(f"    - 因主线分为0被过滤: {processing_stats['filtered_by_mainline']} 只")
-        if processing_stats['filtered_by_money_flow'] > 0:
-            log.info(f"    - 因主力资金为0被过滤: {processing_stats['filtered_by_money_flow']} 只")
-        if processing_stats['filtered_by_volume_ratio'] > 0:
-            log.info(f"    - 因量比不符被过滤(总计): {processing_stats['filtered_by_volume_ratio']} 只")
-            if processing_stats['filtered_by_volume_ratio_lblt'] > 0:
-                log.info(
-                    f"      - 连板龙头模式量比不符(1.184~10.5): {processing_stats['filtered_by_volume_ratio_lblt']} 只")
-            if processing_stats['filtered_by_volume_ratio_first_to_second'] > 0:
-                log.info(
-                    f"      - 一进二模式量比不符(1.15~6.58): {processing_stats['filtered_by_volume_ratio_first_to_second']} 只")
-            if processing_stats['filtered_by_volume_ratio_weak_to_strong'] > 0:
-                log.info(
-                    f"      - 弱转强模式量比不符(0.7~4.2): {processing_stats['filtered_by_volume_ratio_weak_to_strong']} 只")
-
-        total_filtered = (processing_stats['filtered_by_mainline'] +
-                          processing_stats['filtered_by_money_flow'] +
-                          processing_stats['filtered_by_volume_ratio'])
-        log.info(f"    - 总计被过滤股票: {total_filtered} 只")
-
-        log.info(f"  ⚠️  处理失败: {processing_stats['failed_stocks']} 只")
-        log.info(f"  ⏱️  处理时间: {processing_stats['processing_time']:.2f} 秒")
-
-        log.info("=" * 60)
-        log.info(f"✅ 股票筛选完成！符合条件股票: {len(qualified_stocks)} 只")
-        log.info(f"📦 评分缓存已保存: {len(g.score_cache)} 只股票的评分（含6个因子和量比）")
-        log.info("=" * 60)
+#         log.info(f"股票筛选完成：{len(qualified_stocks)}只")
 
         # 最终排序：
         # 先比总分，再比放量MA，最后比主力资金。
@@ -1159,35 +1108,37 @@ def filter_stocks_by_score_optimized(stocks, context, min_score=14, max_stocks=1
         if len(qualified_stocks) > position_limit:
             qualified_stocks = qualified_stocks[:position_limit]
             log.info(f"根据最大持仓数{position_limit}，限制股票数量为前{position_limit}只")
+#             log.info(f"根据最大持仓数{position_limit}，限制股票数量为前{position_limit}只")
 
         # 显示前5只符合条件的股票详情
         if qualified_stocks:
-            log.info("🎯 符合条件的股票列表:")
+            # log.info("🎯 符合条件的股票列表:")
             for i, stock in enumerate(qualified_stocks[:5]):  # 只显示前5只
                 matching_record = next((r for r in score_records if r['股票代码'] == stock), None)
                 if matching_record:
                     mode_tag = f"[{matching_record['模式']}]" if matching_record['模式'] != "未分类" else ""
                     volume_ratio_info = f"量比:{matching_record['量比']:.2f}" if isinstance(matching_record['量比'],
                                                                                             (int, float)) else "量比:未知"
-                    log.info(f"  {i + 1}. {stock} ({matching_record['股票名称']}){mode_tag} - "
-                             f"总分: {matching_record['总评分']} "
-                             f"[涨停:{matching_record['factor1_涨停']} "
-                             f"技术:{matching_record['factor2_技术']} "
-                             f"放量MA:{matching_record['factor3_放量MA']} "
-                             f"主线:{matching_record['factor4_主线']} "
-                             f"情绪:{matching_record['factor5_情绪']} "
-                             f"主力资金:{matching_record['factor6_主力资金']} "
-                             f"{volume_ratio_info}]")
+                    # log.info(f"  {i + 1}. {stock} ({matching_record['股票名称']}){mode_tag} - "
+                    #          f"总分: {matching_record['总评分']} "
+                    #          f"[涨停:{matching_record['factor1_涨停']} "
+                    #          f"技术:{matching_record['factor2_技术']} "
+                    #          f"放量MA:{matching_record['factor3_放量MA']} "
+                    #          f"主线:{matching_record['factor4_主线']} "
+                    #          f"情绪:{matching_record['factor5_情绪']} "
+                    #          f"主力资金:{matching_record['factor6_主力资金']} "
+                    #          f"{volume_ratio_info}]")
 
             if len(qualified_stocks) > 5:
-                log.info(f"  ... 共 {len(qualified_stocks)} 只符合条件股票")
+#                 log.info(f"  ... 共 {len(qualified_stocks)} 只符合条件股票")
 
+                pass
         return qualified_stocks
 
     except Exception as e:
-        log.error(f"股票筛选过程出错: {str(e)}")
+#         log.error(f"股票筛选过程出错: {str(e)}")
         import traceback
-        log.error(traceback.format_exc())
+#         log.error(traceback.format_exc())
         return []
 
 
@@ -1203,22 +1154,28 @@ def get_money_flow_map(context, qualified_stocks):
     money_flow_map = {}
     try:
         if not qualified_stocks:
-            log.info("合格股票列表为空，无需获取主力资金数据")
+            return money_flow_map
+            log.info("没有符合条件的股票")
+            log.info("选股结果：0只，无")
+            log.info("选股结果：0只，无")
+            log.info("没有符合条件的股票")
+#             log.info("合格股票列表为空，无需获取主力资金数据")
             return money_flow_map
 
         # 获取最近5个交易日的主力资金数据（保留所有日期，不做数量限制）
         end_date = context.previous_date
         trade_days = get_trade_days(end_date=end_date, count=5)
-        log.info(f"~~~日期范围: {trade_days[0]} 至 {end_date}, trade_days:{trade_days}")
+#         log.info(f"~~~日期范围: {trade_days[0]} 至 {end_date}, trade_days:{trade_days}")
         money_flow_df = get_money_flow(qualified_stocks, start_date=trade_days[0], end_date=end_date)
         if money_flow_df.empty:
-            log.info("未获取到主力资金流数据")
+#             log.info("未获取到主力资金流数据")
             return money_flow_map
         # 确定日期列（兼容'date'或'trade_date'字段）
         date_column = 'date' if 'date' in money_flow_df.columns else 'trade_date'
         if date_column not in money_flow_df.columns:
-            log.warning("资金流数据中未找到日期列，使用end_date作为默认日期")
+            # log.warning("资金流数据中未找到日期列，使用end_date作为默认日期")
         # 构建资金流映射字典（按股票代码聚合所有日期记录）
+            pass
         for _, row in money_flow_df.iterrows():
             stock_code = row['sec_code']
             # 初始化股票对应的记录列表（首次出现时）
@@ -1238,7 +1195,8 @@ def get_money_flow_map(context, qualified_stocks):
         # for stock, records in money_flow_map.items():
         #     log.info(f"个股主力资金数据：{stock} 共 {len(records)} 条记录，日期范围: {records[0]['date']} 至 {records[-1]['date']}")
     except Exception as e:
-        log.warning(f"批量获取主力资金数据失败: {str(e)}")
+        # log.warning(f"批量获取主力资金数据失败: {str(e)}")
+        pass
     return money_flow_map
 
 
@@ -1262,11 +1220,13 @@ def calculate_ths_indicators(stock, context, period=60, unit='1d', log_debug=Fal
                                       skip_paused=True)
 
         if log_debug:
-            log.debug(f"{stock} 历史数据长度: {len(hist_data)}")
+            # log.debug(f"{stock} 历史数据长度: {len(hist_data)}")
 
+            pass
         if hist_data.empty or len(hist_data) < 20:
             if log_debug:
-                log.debug(f"{stock} 数据不足20根，跳过")
+#                 log.debug(f"{stock} 数据不足20根，跳过")
+                pass
             return {
                 'buy_signals': [],
                 'sell_signals': [],
@@ -1483,9 +1443,10 @@ def calculate_ths_indicators(stock, context, period=60, unit='1d', log_debug=Fal
         sell_signals = list(set(sell_signals))
 
         if log_debug and (buy_signals or sell_signals):
-            log.info(f"THS指标信号 {stock}: 买={buy_signals}, 卖={sell_signals}, 趋势={trend_color}")
+#             log.info(f"THS指标信号 {stock}: 买={buy_signals}, 卖={sell_signals}, 趋势={trend_color}")
 
         # 返回结果
+            pass
         result = {
             'buy_signals': buy_signals,
             'sell_signals': sell_signals,
@@ -1496,9 +1457,9 @@ def calculate_ths_indicators(stock, context, period=60, unit='1d', log_debug=Fal
         return result
 
     except Exception as e:
-        log.error(f"计算同花顺指标时出错 {stock}: {str(e)}")
+#         log.error(f"计算同花顺指标时出错 {stock}: {str(e)}")
         import traceback
-        log.error(traceback.format_exc())
+#         log.error(traceback.format_exc())
         return {
             'buy_signals': [],
             'sell_signals': [],
@@ -1585,15 +1546,15 @@ def check_volume_drop_signal(stock, context):
         # 7. 计算量比，判定是否放量
         volume_ratio = estimated_daily_volume / avg_volume_5
         if volume_ratio >= 1.5:
-            log.info(f"🚨 放量大跌信号: {stock} | 跌幅: {drop_pct * 100:.2f}% | "
-                     f"量比: {volume_ratio:.2f}倍 | 已交易: {market_minutes}分钟")
+#             log.info(f"🚨 放量大跌信号: {stock} | 跌幅: {drop_pct * 100:.2f}% | "
+#                      f"量比: {volume_ratio:.2f}倍 | 已交易: {market_minutes}分钟")
             return True
 
         return False
 
     except Exception as e:
         # 修复：原代码少闭合括号的语法错误，优化日志提示
-        log.error(f"检测{stock}放量大跌信号出错: {str(e)}")
+#         log.error(f"检测{stock}放量大跌信号出错: {str(e)}")
         return False
 
 
@@ -1631,13 +1592,13 @@ def sell_limit_per5min(context):
 
             # 数值有效性检查
             if current_price is None or avg_cost is None or high_limit is None:
-                log.warning(f"{stock} 价格数据缺失，跳过")
+#                 log.warning(f"{stock} 价格数据缺失，跳过")
                 continue
             if not (isinstance(current_price, (int, float)) and current_price > 0):
-                log.warning(f"{stock} 当前价格无效: {current_price}")
+#                 log.warning(f"{stock} 当前价格无效: {current_price}")
                 continue
             if not (isinstance(avg_cost, (int, float)) and avg_cost > 0):
-                log.warning(f"{stock} 成本价无效: {avg_cost}")
+#                 log.warning(f"{stock} 成本价无效: {avg_cost}")
                 continue
 
             # ==================== 新增：涨停不卖判断 ====================
@@ -1652,18 +1613,19 @@ def sell_limit_per5min(context):
                 if (ths_signals['trend_color'] == 'green' and
                         '波段卖' in ths_signals.get('sell_signals', []) and
                         ths_signals.get('last_signal_offset', 100) <= 2):
+                    pass
                     has_sell_signal = True
                 else:
                     has_sell_signal = False
             except Exception as e:
-                log.error(f"{stock} 计算同花顺指标异常: {e}")
+#                 log.error(f"{stock} 计算同花顺指标异常: {e}")
                 has_sell_signal = False
 
             # 2. 检测放量大跌信号
             try:
                 has_volume_drop = check_volume_drop_signal(stock, context)
             except Exception as e:
-                log.error(f"{stock} 检测放量大跌异常: {e}")
+#                 log.error(f"{stock} 检测放量大跌异常: {e}")
                 has_volume_drop = False
 
             # 3. 紧急止损：波段卖信号 + 放量大跌
@@ -1680,7 +1642,7 @@ def sell_limit_per5min(context):
                 record_sell_trade(context, stock, "紧急止损-波段卖+放量大跌", details, current_data, date)
                 # 执行卖出（聚宽标准：order_target_value(security, value)）
                 order_target_value(stock, 0)
-                log.info(f"★★★ 紧急止损 ★★★ 股票: {stock}, 亏损: {loss_pct:.2%}")
+#                 log.info(f"★★★ 紧急止损 ★★★ 股票: {stock}, 亏损: {loss_pct:.2%}")
 
             # 4. 波段卖出：仅波段卖信号且亏损超过5%，且量比大于g.max_sell_vol_ratio
             elif has_sell_signal:
@@ -1698,16 +1660,17 @@ def sell_limit_per5min(context):
                         }
                         record_sell_trade(context, stock, "波段卖出", details, current_data, date)
                         order_target_value(stock, 0)
-                        log.info(f"波段卖出（放量）: {stock}, 亏损: {loss_pct:.2%}, 量比: {vol_ratio:.2f}")
+#                         log.info(f"波段卖出（放量）: {stock}, 亏损: {loss_pct:.2%}, 量比: {vol_ratio:.2f}")
                     else:
-                        log.info(f"{stock} 波段卖信号但未放量（量比{vol_ratio}），暂不卖出")
+#                         log.info(f"{stock} 波段卖信号但未放量（量比{vol_ratio}），暂不卖出")
 
             # 5. 放量大跌：跌幅达到8%以上
+                        pass
             elif has_volume_drop:
                 # 正确获取昨日收盘价（使用前复权数据）
                 hist = attribute_history(stock, 2, '1d', ['close'], skip_paused=True, df=True)
                 if hist is None or len(hist) < 2:
-                    log.warning(f"{stock} 历史数据不足，无法计算跌幅")
+#                     log.warning(f"{stock} 历史数据不足，无法计算跌幅")
                     continue
                 yesterday_close = hist['close'].iloc[-2]  # 前一交易日的收盘价
                 drop_pct = (yesterday_close - current_price) / yesterday_close
@@ -1720,37 +1683,37 @@ def sell_limit_per5min(context):
                     }
                     record_sell_trade(context, stock, "放量大跌止损", details, current_data, date)
                     order_target_value(stock, 0)
-                    log.info(f"放量大跌止损: {stock}, 跌幅: {drop_pct:.2%}")
+#                     log.info(f"放量大跌止损: {stock}, 跌幅: {drop_pct:.2%}")
 
         except ValueError as ve:
             # 捕获数值转换错误，很可能就是股票代码被误转换
-            log.error(f"处理股票 {stock} 卖出检测时发生数值转换错误: {ve}")
+#             log.error(f"处理股票 {stock} 卖出检测时发生数值转换错误: {ve}")
             continue
         except Exception as e:
-            log.error(f"处理股票 {stock} 卖出检测时发生未知错误: {str(e)}")
+#             log.error(f"处理股票 {stock} 卖出检测时发生未知错误: {str(e)}")
             continue
 
 
 def get_hot_leader_first_yin_stocks(context, date_1, date):
     """获取热门龙头首阴股票（策略2中的关键函数）"""
     try:
-        log.info("=" * 70)
-        log.info("? 开始筛选热门龙头首阴股票")
-        log.info(f"   前2交易日: {date_1} (查找连板龙头)")
-        log.info(f"   前1交易日: {date} (判断断板)")
-        log.info("=" * 60)
+        # log.info("=" * 70)
+        # log.info("? 开始筛选热门龙头首阴股票")
+        # log.info(f"   前2交易日: {date_1} (查找连板龙头)")
+        # log.info(f"   前1交易日: {date} (判断断板)")
+        # log.info("=" * 60)
 
-        # 从热门概念缓存提取龙头股票
-        log.info("? 从热门概念缓存提取龙头股票")
-        prev_date_str = date_1.strftime('%Y%m%d')
-        log.info(f"   查询日期: {prev_date_str}")
+        # # 从热门概念缓存提取龙头股票
+        # log.info("? 从热门概念缓存提取龙头股票")
+        # prev_date_str = date_1.strftime('%Y%m%d')
+        # log.info(f"   查询日期: {prev_date_str}")
 
         # 获取该日期的热门概念
         hot_concepts = []
         if hasattr(g, 'hot_concepts_data_cache') and prev_date_str in g.hot_concepts_data_cache:
             hot_concepts = g.hot_concepts_data_cache.get(prev_date_str, [])
 
-        log.info(f"   缓存概念数: {len(hot_concepts)}")
+        # log.info(f"   缓存概念数: {len(hot_concepts)}")
 
         # 提取各概念的龙头股票
         leader_stocks = []
@@ -1776,34 +1739,35 @@ def get_hot_leader_first_yin_stocks(context, date_1, date):
                     if len(ccd) > 0 and ccd['count'].iloc[0] >= 2:
                         leader_stocks.append(stock_code)
                         stock_name = get_security_info(stock_code).display_name
-                        log.info(f"   概念 [{concept_name}] 龙头 (连板{ccd['count'].iloc[0]}):")
-                        log.info(
-                            f"     ? {stock_name} ({stock_code.split('.')[0]} → {stock_code}) - {ccd['count'].iloc[0]}天{ccd['count'].iloc[0]}板")
+                        # log.info(f"   概念 [{concept_name}] 龙头 (连板{ccd['count'].iloc[0]}):")
+                #         log.info(
+                #             f"     ? {stock_name} ({stock_code.split('.')[0]} → {stock_code}) - {ccd['count'].iloc[0]}天{ccd['count'].iloc[0]}板")
                 except:
                     continue
 
         # 去重
         leader_stocks = list(set(leader_stocks))
-        log.info("   --------------------------------------------------------")
-        log.info(f"   ? 统计:")
-        log.info(f"     o 有龙头的概念数: {len(hot_concepts)}/{len(hot_concepts)}")
-        log.info(f"     o 提取龙头股票数: {len(leader_stocks)}")
-        log.info("   --------------------------------------------------------")
+        # log.info("   --------------------------------------------------------")
+        # log.info(f"   ? 统计:")
+        # log.info(f"     o 有龙头的概念数: {len(hot_concepts)}/{len(hot_concepts)}")
+        # log.info(f"     o 提取龙头股票数: {len(leader_stocks)}")
+        # log.info("   --------------------------------------------------------")
 
         # 输出最终龙头股票池
-        log.info(f"   ? 最终龙头股票池:")
+        # log.info(f"   ? 最终龙头股票池:")
         for i, stock in enumerate(leader_stocks, 1):
             try:
                 stock_name = get_security_info(stock).display_name
-                log.info(f"      {i}. {stock_name} ({stock})")
+#                 log.info(f"      {i}. {stock_name} ({stock})")
             except:
-                log.info(f"      {i}. {stock}")
+#                 log.info(f"      {i}. {stock}")
 
-        log.info(f"   ? 找到 {len(leader_stocks)} 只热门龙头股")
-        log.info("   ------------------------------------------------------------------")
+#         log.info(f"   ? 找到 {len(leader_stocks)} 只热门龙头股")
+#         log.info("   ------------------------------------------------------------------")
 
         # 筛选条件1: 前2交易日连板3板以上的换手板
-        log.info(f"   ? 筛选条件1: 前2交易日连板3板以上的换手板，5元以下可以有一字板")
+        # log.info(f"   ? 筛选条件1: 前2交易日连板3板以上的换手板，5元以下可以有一字板")
+                pass
         qualified_stocks = []
 
         for stock in leader_stocks:
@@ -1812,7 +1776,7 @@ def get_hot_leader_first_yin_stocks(context, date_1, date):
                 ccd = get_continue_count_df([stock], date_1, 5)
 
                 if len(ccd) == 0:
-                    log.debug(f"     ? {stock_name} ({stock}) - 无连板数据")
+                    # log.debug(f"     ? {stock_name} ({stock}) - 无连板数据")
                     continue
 
                 # 检查连板数
@@ -1820,7 +1784,7 @@ def get_hot_leader_first_yin_stocks(context, date_1, date):
                 extreme_count = ccd['extreme_count'].iloc[0]
 
                 if board_count < 3:
-                    log.debug(f"     ? {stock_name} ({stock}) - 连板{board_count}板 (不足3板)")
+                    # log.debug(f"     ? {stock_name} ({stock}) - 连板{board_count}板 (不足3板)")
                     continue
 
                 # 检查是否为一字板
@@ -1839,23 +1803,25 @@ def get_hot_leader_first_yin_stocks(context, date_1, date):
 
                 if has_non_extreme or current_price < 5:
                     qualified_stocks.append(stock)
-                    log.debug(f"     ✓ {stock_name} ({stock}) - 符合条件")
+                    # log.debug(f"     ✓ {stock_name} ({stock}) - 符合条件")
                 else:
-                    log.debug(f"     ? {stock_name} ({stock}) - 前2日为一字板(非换手板)")
+                    # log.debug(f"     ? {stock_name} ({stock}) - 前2日为一字板(非换手板)")
 
+                    pass
             except Exception as e:
-                log.debug(f"     ? {stock} - 筛选失败: {str(e)}")
+                # log.debug(f"     ? {stock} - 筛选失败: {str(e)}")
                 continue
 
         if not qualified_stocks:
-            log.warning(f"   ? 未找到符合连板条件的股票")
+            # log.warning(f"   ? 未找到符合连板条件的股票")
 
+            pass
         return qualified_stocks
 
     except Exception as e:
-        log.error(f"筛选热门龙头首阴股票失败: {str(e)}")
+#         log.error(f"筛选热门龙头首阴股票失败: {str(e)}")
         import traceback
-        log.error(traceback.format_exc())
+#         log.error(traceback.format_exc())
         return []
 
 
@@ -1872,7 +1838,7 @@ def record_morning_stats(context):
     后面很多优先级和过滤条件，都会参考这里写进 g.dynamic_params 的结果。
     """
     try:
-        log.info(f"====== {context.current_dt.strftime('%Y-%m-%d')} 盘前数据 ======")
+#         log.info(f"====== {context.current_dt.strftime('%Y-%m-%d')} 盘前数据 ======")
         # 每日重置选股完成标志，确保每天重新选股
         g.stock_list_done = False
         g.is_empty = False  # 新增：每日重置空仓标志
@@ -1913,10 +1879,10 @@ def record_morning_stats(context):
             else:
                 trend = "down"
 
-            log.info("市场状况:")
+            log.info("=========市场状况=========")
             log.info(f"- 大盘趋势: {trend}")
-            log.info(f"- 波动率: {volatility:.2f}%")
-            log.info(f"- 量能比: {volume_ratio:.2f}")
+            # log.info(f"- 波动率: {volatility:.2f}%")
+            # log.info(f"- 量能比: {volume_ratio:.2f}")
 
             g.dynamic_params = {
                 'trend': trend,
@@ -1933,9 +1899,10 @@ def record_morning_stats(context):
             update_strategy_priority(trend)
 
     except Exception as e:
-        log.error(f"记录盘前统计失败: {str(e)}")
+#         log.error(f"记录盘前统计失败: {str(e)}")
 
 
+        pass
 def get_last_n_auction_avg(s, end_date, n=5):
     # 获取最近n个交易日（含end_date）
     trade_days = get_trade_days(end_date=end_date, count=n)
@@ -2058,14 +2025,15 @@ def sell_limit_down(context):
                 ):
                     order_target_value(stock, 0)
                     date_str = date.strftime('%Y-%m-%d')
-                    print(f"~~~精准卖出信号-放量长上影: {stock} ({get_security_info(stock, date_str).display_name})")
-                    print(f"    上影/下影: {upper_shadow / lower_shadow if lower_shadow > 0 else 'inf':.2f}(>3), "
-                          f"开盘涨幅: {open_change:.2f}%(<2%), "
-                          f"竞价量比: {auction_vol_ratio:.2f} (动态阈值判断通过)")
-                    print('———————————————————————————————————')
+                    stock_name = get_security_info(stock, date_str).display_name
+#                     log.info(
+#                         f"卖出结果：{stock}({stock_name}) 触发放量长上影卖出，"
+#                         f"上影/下影{upper_shadow / lower_shadow if lower_shadow > 0 else 'inf':.2f}，"
+#                         f"竞价量比{auction_vol_ratio:.2f}"
+#                     )
                 continue
         except Exception as e:
-            print(f"处理股票 {stock} 时出错: {e}")
+#             log.error(f"处理股票 {stock} 时出错: {e}")
             continue
 
 
@@ -2090,15 +2058,43 @@ def should_empty_position(context):
             avg_volume = volume_data['volume'][:-1].mean()
             current_volume = volume_data['volume'][-1]
             if current_volume > 2 * avg_volume or current_volume < 0.5 * avg_volume:
-                log.info('空仓信号：大盘量能异常（>2倍或<0.5倍）')
+#                 log.info('空仓信号：大盘量能异常（>2倍或<0.5倍）')
                 return True
     except Exception as e:
-        log.error(f"获取大盘量能数据出错: {e}")
+#         log.error(f"获取大盘量能数据出错: {e}")
 
+        pass
     return False
 
 
 # 选股
+def format_stock_list_with_names(stock_list, current_data=None):
+    """Format stock codes as code(name) for logs/messages."""
+    if not stock_list:
+        return ''
+
+    if current_data is None:
+        try:
+            current_data = get_current_data()
+        except Exception:
+            current_data = {}
+
+    formatted = []
+    for stock in stock_list:
+        stock_name = stock
+        try:
+            if stock in current_data and hasattr(current_data[stock], 'name') and current_data[stock].name:
+                stock_name = current_data[stock].name
+            else:
+                stock_info = get_security_info(stock)
+                if stock_info and getattr(stock_info, 'display_name', None):
+                    stock_name = stock_info.display_name
+        except Exception:
+            pass
+        formatted.append(f"{stock}({stock_name})")
+    return ','.join(formatted)
+
+
 def get_stock_list(context):
     """
     每日选股主入口。
@@ -2109,10 +2105,10 @@ def get_stock_list(context):
     3. 围绕昨日涨停股，拆出多个策略模式；
     4. 把结果写入 g，供后面买入逻辑使用。
     """
-    log.info(f"[{context.current_dt.strftime('%H:%M:%S')}] get_stock_list 开始执行")
+#     log.info(f"[{context.current_dt.strftime('%H:%M:%S')}] get_stock_list 开始执行")
     # 如果已经完成选股，直接返回
     if getattr(g, 'stock_list_done', False):
-        log.info("今日已完成选股，跳过重复执行")
+#         log.info("今日已完成选股，跳过重复执行")
         return
 
     # 判断是否需要空仓（原有逻辑）
@@ -2120,6 +2116,7 @@ def get_stock_list(context):
         current_data = get_current_data()
         for stock in context.portfolio.positions:
             log.info(f"[空仓] 卖出持仓股: {stock}")
+#             log.info(f"[空仓] 卖出持仓股: {stock}")
             send_message(f"卖出持仓股: {stock}")
             order_target_value(stock, 0)
         g.is_empty = True
@@ -2131,7 +2128,8 @@ def get_stock_list(context):
         g.dk_stocks = []
         g.fxsbdk_stocks = []
         g.score_cache = {}
-        log.info("[空仓] 当前满足空仓条件，今日不参与选股，已清空候选列表。")
+        log.info("[空仓] 当前满足空仓条件，今日不参与选股，已清空候选列表")
+#         log.info("[空仓] 当前满足空仓条件，今日不参与选股，已清空候选列表。")
         g.stock_list_done = True
         return
     else:
@@ -2156,7 +2154,7 @@ def get_stock_list(context):
         g.fxsbdk = []
         g.lblt = []
         g.stock_list_done = True
-        log.info("昨日涨停股票为空，选股完成")
+#         log.info("昨日涨停股票为空，选股完成")
         return
 
     # 前日曾涨停
@@ -2173,14 +2171,14 @@ def get_stock_list(context):
     h1_list = get_ever_hl_stock2(initial_list, date)
     elements_to_remove = get_hl_stock(initial_list, date_1)
     broken_leaders = get_dblt_stocks(hl1_list, date_1, date, context)
-    log.info(f"市场最高标龙首阴候选broken_leaders：{broken_leaders}")
+    # log.info(f"市场最高标龙首阴候选broken_leaders：{broken_leaders}")
     hot_leader_first_yin = get_hot_leader_first_yin_stocks(context, date_1, date)
     g.reversal = list(set(h1_list) - set(elements_to_remove))
     g.reversal = list(set(g.reversal + hot_leader_first_yin))
     for stock in broken_leaders:
         if stock not in g.reversal:
             g.reversal.append(stock)
-            log.info(f"   ➕ {stock} | 新增断板龙头")
+            # log.info(f"   ➕ {stock} | 新增断板龙头")
     g.fxsbdk = get_ll_stock(initial_list, date)
 
     # 集合竞价常用于判断开盘强弱，是打板策略里的关键参考
@@ -2191,7 +2189,7 @@ def get_stock_list(context):
 
     # 关键修改：如果集合竞价数据为空且昨日涨停列表非空，则本次不完成选股（等待重试）
     if auctions.empty:
-        log.info("集合竞价数据为空，稍后重试")
+#         log.info("集合竞价数据为空，稍后重试")
         return  # 不设置完成标志，等待下一次定时任务
 
     # 获取前收盘价
@@ -2219,16 +2217,18 @@ def get_stock_list(context):
                 else:
                     lblt_stocks.append(stock)
             except Exception as e:
-                log.error(f"计算{stock}近期一字板失败: {str(e)}")
+                # log.error(f"计算{stock}近期一字板失败: {str(e)}")
+                pass
         if high_risk_stocks:
-            log.info(
-                f"近5日有2个以上连续一字板的高风险个股(将被排除): {[get_security_info(s).display_name for s in high_risk_stocks]}")
+            # log.info(
+            #     f"近5日有2个以上连续一字板的高风险个股(将被排除): {[get_security_info(s).display_name for s in high_risk_stocks]}")
+            pass
         g.lblt = lblt_stocks
         g.high_risk_stocks_today = high_risk_stocks  # 缓存高风险股票，供 buy() 复用
 
     # 到这里说明“今日候选池”已经准备完成，后续买入阶段可直接使用
     g.stock_list_done = True
-    log.info("选股完成")
+#     log.info("选股完成")
     buy(context)
 
 
@@ -2252,28 +2252,28 @@ def get_dblt_stocks(hl1_list, date_1, date, context):
     # 最高连板数
     M = ccd['count'].max() if len(ccd) != 0 else 0
 
-    log.info(f"   前第2日({date_1})连板股票数：{len(ccd)} 只")
-    log.info(f"   最高连板数：{M} 板")
+    # log.info(f"   前第2日({date_1})连板股票数：{len(ccd)} 只")
+    # log.info(f"   最高连板数：{M} 板")
 
     if M == 0 or len(ccd) == 0:
-        log.info("⚠️ 无连板数据")
+#         log.info("⚠️ 无连板数据")
         g.target_list = []
         return []
 
     # ==================== 第五步：识别断板龙头 ====================
-    log.info("🔍 步骤3：识别断板龙头...")
+    # log.info("🔍 步骤3：识别断板龙头...")
 
     # 获取最高板股票列表
     max_board_df = ccd[ccd['count'] == M]
     max_board_stocks = list(max_board_df.index)
 
-    log.info(f"   最高板股票数：{len(max_board_stocks)} 只")
+    # log.info(f"   最高板股票数：{len(max_board_stocks)} 只")
 
     # 获取前第1日的涨停股票列表
     initial_list_date = prepare_stock_list(date)
     hl_list_date = get_hl_stock(initial_list_date, date)
 
-    log.info(f"   前第1日({date})涨停股：{len(hl_list_date)} 只")
+    # log.info(f"   前第1日({date})涨停股：{len(hl_list_date)} 只")
 
     # 识别断板龙头
     broken_leaders = []
@@ -2341,14 +2341,15 @@ def get_dblt_stocks(hl1_list, date_1, date, context):
                         'close': close_price
                     }
 
-                    log.info(f"   ✅ {stock_name} ({stock}) | {broken_type} | {change_pct:+.2f}%")
+                    # log.info(f"   ✅ {stock_name} ({stock}) | {broken_type} | {change_pct:+.2f}%")
 
             except Exception as e:
-                log.debug(f"   ⚠️ {stock} 获取详情失败: {e}")
+#                 log.debug(f"   ⚠️ {stock} 获取详情失败: {e}")
 
-    log.info(f"\n   断板龙头数：{len(broken_leaders)} 只")
+#     log.info(f"\n   断板龙头数：{len(broken_leaders)} 只")
 
     # 保存到全局变量
+                pass
     g.broken_leaders = broken_leaders
     g.broken_leaders_info = broken_leaders_info
 
@@ -2359,7 +2360,7 @@ def get_dblt_stocks(hl1_list, date_1, date, context):
         if info['broken_type'] in priority_types
     ]
 
-    log.info(f"   优质断板龙头：{len(g.priority_broken_leaders)} 只")
+    # log.info(f"   优质断板龙头：{len(g.priority_broken_leaders)} 只")
     return broken_leaders
 
 
@@ -2395,7 +2396,7 @@ def has_consecutive_extreme_limit(stock, date):
         return max_consecutive >= 2
 
     except Exception as e:
-        log.error(f"计算{stock}近期一字板失败: {str(e)}")
+#         log.error(f"计算{stock}近期一字板失败: {str(e)}")
         return False
 
 
@@ -2456,7 +2457,7 @@ def calculate_sentiment_score_optimized(stock, context):
         return min(score, 5)  # 最高5分
 
     except Exception as e:
-        log.error(f"计算情绪评分失败 {stock}: {str(e)}")
+#         log.error(f"计算情绪评分失败 {stock}: {str(e)}")
         return 0
 
 
@@ -2474,7 +2475,7 @@ def is_limit_up_open(stock, current_data):
         return abs(day_open - high_limit) < 0.01
 
     except Exception as e:
-        log.error(f"检查开盘涨停失败 {stock}: {str(e)}")
+#         log.error(f"检查开盘涨停失败 {stock}: {str(e)}")
         return False
 
 def filter_by_valuation(stock_list, context):
@@ -2491,7 +2492,7 @@ def filter_by_valuation(stock_list, context):
     # 只在4,10月生效
     current_month = context.current_dt.month
     if current_month not in [4,10]:
-        log.info(f"当前月份 {current_month}，不执行4,10月专用过滤")
+        # log.info(f"当前月份 {current_month}，不执行4,10月专用过滤")
         return stock_list
     
     end_date = context.previous_date
@@ -2504,7 +2505,7 @@ def filter_by_valuation(stock_list, context):
             fields=['pe_ratio', 'pcf_ratio', 'pb_ratio']
         )
         if df.empty:
-            log.warning("未获取到估值数据，跳过过滤")
+            # log.warning("未获取到估值数据，跳过过滤")
             return stock_list
         
         # 构建字典加速
@@ -2547,14 +2548,14 @@ def filter_by_valuation(stock_list, context):
                 filtered.append(stock)
                 continue
             
-            log.info(f"{stock} 过滤原因: {fail_reason}")
+            # log.info(f"{stock} 过滤原因: {fail_reason}")
             removed.append(stock)
         
-        log.info(f"4月估值过滤完成：原{len(stock_list)}只，过滤{len(removed)}只，剩余{len(filtered)}只")
+#         log.info(f"4月估值过滤完成：原{len(stock_list)}只，过滤{len(removed)}只，剩余{len(filtered)}只")
         return filtered
         
     except Exception as e:
-        log.error(f"估值过滤失败: {str(e)}")
+#         log.error(f"估值过滤失败: {str(e)}")
         return stock_list
 
 # 交易
@@ -2570,14 +2571,14 @@ def buy(context):
     """
     # 新增：如果选股未完成，跳过本次买入
     if not getattr(g, 'stock_list_done', False):
-        log.info("选股尚未完成，跳过买入")
+#         log.info("选股尚未完成，跳过买入")
         return
 
     if g.is_empty:
         return
 
     # g.priority_config 决定多个模式同时入选时，谁排在前面
-    log.info(f"trend:{g.trade_stats['market_stats']},g.priority_config:{g.priority_config}")
+#     log.info(f"trend:{g.trade_stats['market_stats']},g.priority_config:{g.priority_config}")
 
     # ========== 关键修改6：更新优先级配置为策略2的配置 ==========
     # 根据市场状态动态调整优先级（策略2逻辑）
@@ -2589,7 +2590,7 @@ def buy(context):
         # 策略2的优先级配置逻辑
         if market_score >= 80 and one_to_two_success_rate < 15:
             g.priority_config = ['lb', 'rzq', 'fxsbdk', 'dk', 'yje']
-            log.info("策略优先级动态配置: lb > rzq > fxsbdk > dk > yje")
+#             log.info("策略优先级动态配置: lb > rzq > fxsbdk > dk > yje")
         else:
             g.priority_config = ['lb', 'rzq', 'yje', 'fxsbdk', 'dk']
 
@@ -2603,7 +2604,7 @@ def buy(context):
 
     # 周一至周四14:50不买票的逻辑
     if current_weekday < 4 and is_afternoon:
-        log.info(f'当前为周{current_weekday + 1} 14:50，不执行买入')
+#         log.info(f'当前为周{current_weekday + 1} 14:50，不执行买入')
         return
 
     # 交易记录会在买卖两端持续补充，方便盘后复盘
@@ -2666,22 +2667,23 @@ def buy(context):
                 hot_concept = get_hot_concept(dct, date)
                 hot_stocks = filter_concept_stock(dct, hot_concept)
             except Exception as e:
-                log.warning(f"获取热门概念失败: {e}")
+#                 log.warning(f"获取热门概念失败: {e}")
                 hot_stocks = []
 
             # 高风险股票筛选（直接读 get_stock_list() 中已缓存的结果，避免重复计算）
             high_risk_stocks = getattr(g, 'high_risk_stocks_today', [])
             if high_risk_stocks:
-                log.info(
-                    f"近5日有2个以上连续一字板的高风险个股(将被排除，来自缓存): {[get_security_info(s).display_name for s in high_risk_stocks]}")
+                # log.info(
+                #     f"近5日有2个以上连续一字板的高风险个股(将被排除，来自缓存): {[get_security_info(s).display_name for s in high_risk_stocks]}")
 
             # 龙头特征筛选
+                pass
             condition_dct = {}
             for s in lt:
                 if s in high_risk_stocks:
                     continue
                 if is_limit_up_open(s, current_data):
-                    log.info(f"早盘开盘涨停(将被排除): {s} {get_security_info(s).display_name}")
+                    # log.info(f"早盘开盘涨停(将被排除): {s} {get_security_info(s).display_name}")
                     continue
 
                 try:
@@ -2694,7 +2696,7 @@ def buy(context):
                             concepts = list(concepts) if hasattr(concepts, '__iter__') else []
                         stock_concepts = concepts
                     except Exception as e:
-                        log.warning(f"获取{s}概念失败: {e}")
+#                         log.warning(f"获取{s}概念失败: {e}")
                         stock_concepts = []
                     hc = len(stock_concepts) > 0
 
@@ -2704,7 +2706,7 @@ def buy(context):
                         ds = row.iloc[0]['extreme_count']
                     else:
                         ds = 0
-                        log.warning(f"股票{s}不在ccd_reset中，ds设为0")
+                        # log.warning(f"股票{s}不在ccd_reset中，ds设为0")
 
                     # 市值
                     try:
@@ -2714,7 +2716,7 @@ def buy(context):
                         )
                         sz = sz_df.iloc[0, 1] if not sz_df.empty else 0
                     except Exception as e:
-                        log.warning(f"获取{s}市值失败: {e}")
+#                         log.warning(f"获取{s}市值失败: {e}")
                         sz = 0
 
                     # 换手
@@ -2722,7 +2724,7 @@ def buy(context):
                         hs_result = HSL([s], date)
                         hs = hs_result[0].get(s, 0) if hs_result and len(hs_result) > 0 else 0
                     except Exception as e:
-                        log.warning(f"获取{s}换手率失败: {e}")
+#                         log.warning(f"获取{s}换手率失败: {e}")
                         hs = 0
 
                     # 龙头概念
@@ -2742,11 +2744,11 @@ def buy(context):
                     if condition:
                         condition_dct[s] = f"{stock_name} —— {condition}"
                 except Exception as e:
-                    log.error(f"龙头特征筛选{s}失败: {str(e)}")
+#                     log.error(f"龙头特征筛选{s}失败: {str(e)}")
                     continue
 
             stock_list = list(condition_dct.keys())
-            log.info(f"龙头股筛选结果(已排除高风险股票): {[get_security_info(s).display_name for s in stock_list]}")
+            # log.info(f"龙头股筛选结果(已排除高风险股票): {[get_security_info(s).display_name for s in stock_list]}")
 
             # 因子过滤
             df = get_factor_filter_df(context, stock_list, g.jqfactor, g.sort)
@@ -2813,7 +2815,7 @@ def buy(context):
             else:
                 val_row = pd.DataFrame()
             if val_row.empty:
-                log.debug(f"弱转强过滤 {s}：无估值数据")
+#                 log.debug(f"弱转强过滤 {s}：无估值数据")
                 continue
             market_cap = val_row['market_cap'].iloc[0]
             circ_market_cap = val_row['circulating_market_cap'].iloc[0]
@@ -2824,11 +2826,12 @@ def buy(context):
                 cap_ok = (market_cap >= 70 and circ_market_cap <= 520)  # 普通要求
 
             if not cap_ok:
-                log.debug(
-                    f"弱转强过滤 {s}：市值不符合 (is_broken={is_broken}, market_cap={market_cap}亿, circ_market_cap={circ_market_cap}亿)")
-                continue
+                # log.debug(
+                #     f"弱转强过滤 {s}：市值不符合 (is_broken={is_broken}, market_cap={market_cap}亿, circ_market_cap={circ_market_cap}亿)")
+                # continue
 
             # 5. 量能条件（保持不变，如有需要也可放宽）
+                pass
             if rise_low_volume(s, context):
                 # log.debug(f"弱转强过滤 {s}：量能条件 rise_low_volume 触发")
                 continue
@@ -2846,7 +2849,7 @@ def buy(context):
                 vol_ratio = _volume / prev_volume
                 min_vol_ratio = 0.01 if is_broken else 0.03  # 断板龙头允许1%
                 if vol_ratio < min_vol_ratio:
-                    log.debug(f"弱转强过滤 {s}：竞价量占比{vol_ratio:.2%}<{min_vol_ratio:.0%}")
+                    # log.debug(f"弱转强过滤 {s}：竞价量占比{vol_ratio:.2%}<{min_vol_ratio:.0%}")
                     continue
 
                 current_ratio = _current / (current_data[s].high_limit / 1.1)
@@ -2858,22 +2861,22 @@ def buy(context):
                     ratio_high = 1.09
 
                 if current_ratio < ratio_low or current_ratio > ratio_high:
-                    log.debug(f"弱转强过滤 {s}：开盘比值{current_ratio:.2f}不在[{ratio_low:.2f},{ratio_high:.2f}]")
+                    # log.debug(f"弱转强过滤 {s}：开盘比值{current_ratio:.2f}不在[{ratio_low:.2f},{ratio_high:.2f}]")
                     continue
             else:
-                log.debug(f"弱转强过滤 {s}：无集合竞价数据")
+                # log.debug(f"弱转强过滤 {s}：无集合竞价数据")
                 continue
 
             # 7. 主线分（保持不变）
             mainline_score = calculate_mainline_score_optimized(s, context)
             if mainline_score == 0:
-                log.info(f"弱转强个股 {s} 主线分为0，不纳入买入候选")
+                # log.info(f"弱转强个股 {s} 主线分为0，不纳入买入候选")
                 continue
 
             # 新增主线分上限判断
             max_mainline = g.dynamic_params.get('rzq_max_mainline', 6)
             if mainline_score > max_mainline:
-                log.info(f"弱转强个股 {s} 主线分{mainline_score}>{max_mainline}，不纳入买入候选")
+                # log.info(f"弱转强个股 {s} 主线分{mainline_score}>{max_mainline}，不纳入买入候选")
                 continue
 
             rzq_stocks.append(s)
@@ -2907,6 +2910,7 @@ def buy(context):
                 val_row_gk = pd.DataFrame()
             if val_row_gk.empty or val_row_gk['market_cap'].iloc[0] < 50 or \
                     val_row_gk['circulating_market_cap'].iloc[0] > 520:
+                pass
                 continue
 
             # 条件二：左压
@@ -2942,13 +2946,11 @@ def buy(context):
                 if volume_ratio < 1.15 or volume_ratio > 6.58:
                     continue
             except Exception as e:
-                log.warning(f"获取股票 {s} 的量比数据失败: {str(e)}")
+                # log.warning(f"获取股票 {s} 的量比数据失败: {str(e)}")
                 continue
 
             # 如果股票满足所有条件，则添加到列表中
             gk_stocks.append(s)
-            print(
-                f"~~~一进二入选个股：{s} ,总市值:{val_row_gk['market_cap'].iloc[0]},流通市值(亿元):{val_row_gk['circulating_market_cap'].iloc[0]}")
 
         # 4. 首板低开（第四优先级）
         if g.gap_down:
@@ -3038,8 +3040,11 @@ def buy(context):
         g.qualified_stocks = qualified_stocks
         if not qualified_stocks:
             log.info("没有符合条件的股票")
+            log.info("选股结果：0只，无")
+        if not qualified_stocks:
+#             log.info("没有符合条件的股票")
             send_message('今日无目标个股')
-            print('今日无目标个股')
+#             log.info('选股结果：0只，无')
             return
 
         # 根据qualified_stocks过滤各个模式个股，只保留同时存在于qualified_stocks中的股票
@@ -3057,24 +3062,19 @@ def buy(context):
 
     # 非周五交易日处理
     if current_weekday < 4:
-        # 打印选股结果
-        print('———————————————————————————————————')
+        qualified_stock_text = format_stock_list_with_names(qualified_stocks)
+        log.info(f"选股结果：{len(qualified_stocks)}只，{qualified_stock_text}")
         send_message('今日选股：' + ','.join(qualified_stocks))
-        print(f'连板龙头（{len(lblt_stocks)}）：{",".join(lblt_stocks)}')
-        print(f'弱转强（{len(rzq_stocks)}）：{",".join(rzq_stocks)}')
-        print(f'一进二（{len(gk_stocks)}）：{",".join(gk_stocks)}')
-        print(f'首板低开（{len(dk_stocks)}）：{",".join(dk_stocks)}')
-        print(f'反向首板低开（{len(fxsbdk_stocks)}）：{",".join(fxsbdk_stocks)}')
-        print(f'最终选股（{len(qualified_stocks)}）：{",".join(qualified_stocks)}')
-        print('———————————————————————————————————')
 
     # 周五特殊处理逻辑
     if current_weekday == 4:  # 周五
         # 早盘9:28:10执行：先筛选股票，再买入连板龙头和首板低开
         if is_morning:
-            # 保存选股结果到全局变量（已在之前设置）
             log.info("周五早盘：筛选股票并买入连板龙头和首板低开")
             log.info(f"周五早盘选出的个股：{g.qualified_stocks}")
+            # 保存选股结果到全局变量（已在之前设置）
+#             log.info("周五早盘：筛选股票并买入连板龙头和首板低开")
+#             log.info(f"周五早盘选出的个股：{g.qualified_stocks}")
 
             # 提取连板龙头和首板低开股票
             friday_morning_stocks = []
@@ -3087,17 +3087,17 @@ def buy(context):
                         # 检查开盘价格是否超过8%
                         try:
                             stock_data = current_data[s]
-                            log.debug(f"检查连板龙头 {s} 的开盘价格，stock_data属性: {dir(stock_data)}")
+                            # log.debug(f"检查连板龙头 {s} 的开盘价格，stock_data属性: {dir(stock_data)}")
                             open_price = stock_data.day_open
                             # 检查day_open是否有效（天回测时可能为NaN）
                             if open_price is None or (isinstance(open_price, float) and math.isnan(open_price)):
-                                log.error(f"连板龙头 {s} 的开盘价无效")
+#                                 log.error(f"连板龙头 {s} 的开盘价无效")
                                 filtered_lblt_stocks.append(s)  # 出错时保留股票
                             else:
                                 # 获取前收盘价，使用attribute_history
-                                log.debug(f"获取连板龙头 {s} 的前收盘价")
+#                                 log.debug(f"获取连板龙头 {s} 的前收盘价")
                                 prev_data = attribute_history(s, 1, '1d', fields=['close'], skip_paused=True)
-                                log.debug(f"prev_data形状: {prev_data.shape}, 内容: {prev_data}")
+#                                 log.debug(f"prev_data形状: {prev_data.shape}, 内容: {prev_data}")
                                 if not prev_data.empty:
                                     prev_close = prev_data['close'].iloc[0]
                                     if prev_close > 0:
@@ -3105,14 +3105,15 @@ def buy(context):
                                         if open_change_pct <= 8:
                                             filtered_lblt_stocks.append(s)
                                         else:
-                                            log.info(f"连板龙头 {s} 开盘涨幅{open_change_pct:.2f}%超过8%，筛除")
+#                                             log.info(f"连板龙头 {s} 开盘涨幅{open_change_pct:.2f}%超过8%，筛除")
+                                            pass
                                 else:
-                                    log.error(f"无法获取连板龙头 {s} 的前收盘价")
+#                                     log.error(f"无法获取连板龙头 {s} 的前收盘价")
                                     filtered_lblt_stocks.append(s)  # 出错时保留股票
                         except Exception as e:
-                            log.error(f"检查连板龙头 {s} 开盘价格时出错: {e}")
+#                             log.error(f"检查连板龙头 {s} 开盘价格时出错: {e}")
                             import traceback
-                            log.error(f"错误堆栈: {traceback.format_exc()}")
+#                             log.error(f"错误堆栈: {traceback.format_exc()}")
                             filtered_lblt_stocks.append(s)  # 出错时保留股票
                 friday_morning_stocks.extend(filtered_lblt_stocks)
             # 首板低开
@@ -3124,18 +3125,24 @@ def buy(context):
 
             if friday_morning_stocks:
                 log.info(f"周五早盘候选股票（连板龙头+首板低开）：{friday_morning_stocks}")
-                # 不在此买入——早盘买入统一在09:33由buy_after_auction_filter执行内外比过滤后买入
                 log.info("周五早盘股票已存入候选池，09:33内外比过滤后买入")
+#                 log.info(f"周五早盘候选股票（连板龙头+首板低开）：{friday_morning_stocks}")
+                # 不在此买入——早盘买入统一在09:33由buy_after_auction_filter执行内外比过滤后买入
+#                 log.info("周五早盘股票已存入候选池，09:33内外比过滤后买入")
+                pass
             else:
                 log.info("周五早盘无可买入的连板龙头或首板低开股票")
+#                 log.info("周五早盘无可买入的连板龙头或首板低开股票")
 
+                pass
             return
 
         # 14:50执行：买入其他模式（弱转强、一进二、反向首板低开）
         if is_afternoon:
             log.info("周五14:50执行建仓（弱转强、一进二、反向首板低开）")
+#             log.info("周五14:50执行建仓（弱转强、一进二、反向首板低开）")
             if not hasattr(g, 'qualified_stocks') or not g.qualified_stocks:
-                log.warning("周五14:50：未找到可交易股票")
+#                 log.warning("周五14:50：未找到可交易股票")
                 return
 
             # 早盘筛选结果
@@ -3162,7 +3169,7 @@ def buy(context):
             other_mode_stocks = list(set(other_mode_stocks))
 
             if not other_mode_stocks:
-                log.info("周五14:50：无其他模式股票")
+#                 log.info("周五14:50：无其他模式股票")
                 send_message('周五下午无目标个股')
                 return
 
@@ -3170,7 +3177,7 @@ def buy(context):
             filtered_other_stocks = optimize_friday_trading_logic(context, other_mode_stocks)
 
             if not filtered_other_stocks:
-                log.info("周五14:50：优化筛选后无符合条件的其他模式股票")
+#                 log.info("周五14:50：优化筛选后无符合条件的其他模式股票")
                 send_message('周五下午无目标个股')
                 return
 
@@ -3185,14 +3192,8 @@ def buy(context):
             g.lblt_stocks = []  # 清空，避免重复
             g.dk_stocks = []  # 清空
 
-            # 打印选股结果（下午）
-            print('———————————————————————————————————')
             send_message('今日下午选股（其他模式）：' + ','.join(g.qualified_stocks))
-            print(f'弱转强（{len(g.rzq_stocks)}）：{",".join(g.rzq_stocks)}')
-            print(f'一进二（{len(g.gk_stocks)}）：{",".join(g.gk_stocks)}')
-            print(f'反向首板低开（{len(g.fxsbdk_stocks)}）：{",".join(g.fxsbdk_stocks)}')
-            print(f'最终选股（{len(g.qualified_stocks)}）：{",".join(g.qualified_stocks)}')
-            print('———————————————————————————————————')
+#             log.info(f"选股结果：{len(g.qualified_stocks)}只，{','.join(g.qualified_stocks)}")
 
     # ==================== 买入执行逻辑 ====================  
     # 筛选连板龙头：开盘价格超过8%就筛除
@@ -3203,17 +3204,17 @@ def buy(context):
             # 检查开盘价格是否超过8%
             try:
                 stock_data = current_data[s]
-                log.debug(f"检查连板龙头 {s} 的开盘价格，stock_data属性: {dir(stock_data)}")
+#                 log.debug(f"检查连板龙头 {s} 的开盘价格，stock_data属性: {dir(stock_data)}")
                 open_price = stock_data.day_open
                 # 检查day_open是否有效（天回测时可能为NaN）
                 if open_price is None or (isinstance(open_price, float) and math.isnan(open_price)):
-                    log.error(f"连板龙头 {s} 的开盘价无效")
+#                     log.error(f"连板龙头 {s} 的开盘价无效")
                     filtered_lblt_stocks.append(s)  # 出错时保留股票
                 else:
                     # 获取前收盘价，使用attribute_history
-                    log.debug(f"获取连板龙头 {s} 的前收盘价")
+#                     log.debug(f"获取连板龙头 {s} 的前收盘价")
                     prev_data = attribute_history(s, 1, '1d', fields=['close'], skip_paused=True)
-                    log.debug(f"prev_data形状: {prev_data.shape}, 内容: {prev_data}")
+#                     log.debug(f"prev_data形状: {prev_data.shape}, 内容: {prev_data}")
                     if not prev_data.empty:
                         prev_close = prev_data['close'].iloc[0]
                         if prev_close > 0:
@@ -3221,14 +3222,15 @@ def buy(context):
                             if open_change_pct <= 8:
                                 filtered_lblt_stocks.append(s)
                             else:
-                                log.info(f"连板龙头 {s} 开盘涨幅{open_change_pct:.2f}%超过8%，筛除")
+#                                 log.info(f"连板龙头 {s} 开盘涨幅{open_change_pct:.2f}%超过8%，筛除")
+                                pass
                     else:
-                        log.error(f"无法获取连板龙头 {s} 的前收盘价")
+#                         log.error(f"无法获取连板龙头 {s} 的前收盘价")
                         filtered_lblt_stocks.append(s)  # 出错时保留股票
             except Exception as e:
-                log.error(f"检查连板龙头 {s} 开盘价格时出错: {e}")
+#                 log.error(f"检查连板龙头 {s} 开盘价格时出错: {e}")
                 import traceback
-                log.error(f"错误堆栈: {traceback.format_exc()}")
+#                 log.error(f"错误堆栈: {traceback.format_exc()}")
                 filtered_lblt_stocks.append(s)  # 出错时保留股票
         g.lblt_stocks = filtered_lblt_stocks
         # 同时从qualified_stocks中移除筛除的股票
@@ -3323,7 +3325,7 @@ def classify_broken_type(open_price, close_price, high_price, low_price, high_li
             return "普通断板-平盘"
 
     except Exception as e:
-        log.error(f"⚠️ 断板类型分类失败: {e}")
+#         log.error(f"⚠️ 断板类型分类失败: {e}")
         return "未知类型"
 
 
@@ -3375,17 +3377,17 @@ def check_volume_for_buy(stock, context, current_data):
 
         # 6. 日志输出（单位统一为万股）
         stock_name = get_security_info(stock).display_name
-        log.info(f"📊 买入量能检测 {stock}({stock_name}):")
-        log.info(f"   时间: {context.current_dt.strftime('%H:%M')}")
-        log.info(f"   当日累计成交量: {current_volume / 10000:.2f}万股")
-        log.info(f"   昨日成交量: {yesterday_volume / 10000:.2f}万股")
-        log.info(f"   量能比例(当日/昨日): {volume_ratio:.2f}倍")
-        log.info(f"   买入条件(≤1.15): {'✅通过' if can_buy else '❌不通过'}")
+#         log.info(f"📊 买入量能检测 {stock}({stock_name}):")
+#         log.info(f"   时间: {context.current_dt.strftime('%H:%M')}")
+#         log.info(f"   当日累计成交量: {current_volume / 10000:.2f}万股")
+#         log.info(f"   昨日成交量: {yesterday_volume / 10000:.2f}万股")
+#         log.info(f"   量能比例(当日/昨日): {volume_ratio:.2f}倍")
+#         log.info(f"   买入条件(≤1.15): {'✅通过' if can_buy else '❌不通过'}")
 
         return can_buy
 
     except Exception as e:
-        log.error(f"买入量能检测出错 {stock}: {str(e)}")
+#         log.error(f"买入量能检测出错 {stock}: {str(e)}")
         return False
 
 
@@ -3434,7 +3436,7 @@ def get_dynamic_correction(stock, minutes_elapsed, context):
             return default_factor
 
     except Exception as e:
-        log.warning(f"获取动态修正因子失败 {stock}: {e}，使用默认")
+#         log.warning(f"获取动态修正因子失败 {stock}: {e}，使用默认")
         return default_factor
 
 
@@ -3448,7 +3450,7 @@ def is_above_ma5(stock, context):
         yesterday_close = closes[-1]
         return yesterday_close > ma5
     except Exception as e:
-        log.debug(f"is_above_ma5 检查 {stock} 失败: {e}")
+#         log.debug(f"is_above_ma5 检查 {stock} 失败: {e}")
         return False
 
 
@@ -3467,7 +3469,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
     """
     # 空仓检查
     if getattr(g, 'is_empty', False):
-        log.info("当前为空仓状态，不执行买入")
+#         log.info("当前为空仓状态，不执行买入")
         return
 
     # 防御性初始化
@@ -3508,7 +3510,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
     positions_value = context.portfolio.positions_value
     position_ratio = positions_value / total_value if total_value > 0 else 0
     if position_ratio >= 0.85:
-        log.debug(f"持股仓位已达{position_ratio:.2%}，超过85%阈值，跳过买入")
+#         log.debug(f"持股仓位已达{position_ratio:.2%}，超过85%阈值，跳过买入")
         return
 
     # 这里做“下单前最后一轮过滤”，只保留当前这一刻依然值得买的票
@@ -3517,7 +3519,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
     for s in candidate_pool:
         # ----- 1. 涨停过滤（统一处理）-----
         if s in g.stocks_limit_up_today:
-            log.info(f"❌ {s} 当天曾涨停，跳过买入")
+#             log.info(f"❌ {s} 当天曾涨停，跳过买入")
             continue
 
         stock_data = current_data[s]
@@ -3527,7 +3529,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
         # 当前涨停检测（防止未及时标记）
         if current_price >= high_limit * 0.995:
             g.stocks_limit_up_today.add(s)
-            log.info(f"❌ {s} 当前价格涨停，跳过买入")
+#             log.info(f"❌ {s} 当前价格涨停，跳过买入")
             continue
 
         # ----- 2. 技术指标检查（仅定时任务）-----
@@ -3552,7 +3554,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
 
     # 如果没有候选，直接返回
     if not current_buy_candidates:
-        log.info("无符合条件的未持仓股票，跳过买入")
+#         log.info("无符合条件的未持仓股票，跳过买入")
         return
 
     # ========== 排序：按模式优先级和评分 ==========
@@ -3569,13 +3571,13 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
     holding_stocks = set(context.portfolio.positions.keys())
     candidate_stocks = [s for s in sorted_stocks if s not in holding_stocks]
     if not candidate_stocks:
-        log.info("过滤后无符合条件的未持仓股票，跳过买入")
+#         log.info("过滤后无符合条件的未持仓股票，跳过买入")
         return
 
     # 计算可买入数量
     buy_count = min(len(candidate_stocks), available_positions)
     if buy_count <= 0:
-        log.info("无可买入股票或仓位已满")
+#         log.info("无可买入股票或仓位已满")
         return
 
     # 资金分配思路：
@@ -3585,6 +3587,7 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
     target_per_position = context.portfolio.total_value * (1 - g.cash_reserve_ratio) / buy_count
     value = min(target_per_position, context.portfolio.available_cash / buy_count)
     log.info(f"买入资金：{value:.2f}，目标单仓：{target_per_position:.2f}，总资产：{context.portfolio.total_value:.2f}")
+#     log.info(f"买入资金：{value:.2f}，目标单仓：{target_per_position:.2f}，总资产：{context.portfolio.total_value:.2f}")
 
     # 执行买入
     bought_count = 0
@@ -3632,26 +3635,31 @@ def execute_buy(context, isFiltered=False, custom_stocks=None):
                     g.today_trades = []
                 g.today_trades.append(trade_info)
                 bought_count += 1
+                stock_name = current_data[s].name if s in current_data and hasattr(current_data[s], 'name') else s
+                log.info(f"买入执行: {s}({stock_name}), 时间={current_time}, 价格={price:.2f}, 金额={value:.2f}, 数量={actual_quantity}, 原因={trade_info['reason']}")
 
-                log.info(f"\n==== 买入执行 {s} ====")
-                log.info(f"时间: {current_time}")
-                log.info(f"买入价格: {price:.2f}")
-                log.info(f"买入金额: {value:.2f}")
-                log.info(f"买入数量: {actual_quantity}")
-                log.info(f"买入原因: {trade_info['reason']}")
-                log.info(f"当前总值: {trade_info['market_value']:.2f}")
-                log.info(
-                    f"昨日量: {last_volume}  前一日量: {last_2_volume}  量能比: {trade_volume_ra if trade_volume_ra is not None else 'NA'}")
-                log.info("————————————————————")
+#                 log.info(f"\n==== 买入执行 {s} ====")
+#                 log.info(f"时间: {current_time}")
+#                 log.info(f"买入价格: {price:.2f}")
+#                 log.info(f"买入金额: {value:.2f}")
+#                 log.info(f"买入数量: {actual_quantity}")
+#                 log.info(f"买入原因: {trade_info['reason']}")
+#                 log.info(f"当前总值: {trade_info['market_value']:.2f}")
+#                 log.info(
+#                     f"昨日量: {last_volume}  前一日量: {last_2_volume}  量能比: {trade_volume_ra if trade_volume_ra is not None else 'NA'}")
+#                 log.info("————————————————————")
 
                 send_message(f'买入 {s} 价格:{price:.2f} 数量:{actual_quantity}')
             else:
-                log.error(f"买入 {s} 失败")
+#                 log.error(f"买入 {s} 失败")
+                pass
         except Exception as e:
-            log.error(f"买入 {s} 时发生错误: {str(e)}")
+#             log.error(f"买入 {s} 时发生错误: {str(e)}")
 
+            pass
     if bought_count == 0:
         log.info("本次未买入任何股票")
+#         log.info("本次未买入任何股票")
         send_message('本次未买入任何股票')
 
 
@@ -3682,8 +3690,8 @@ def sort_stocks_by_priority(qualified_stocks, lblt_stocks, gk_stocks, rzq_stocks
             # 优先级：第一个模式优先级最高
             pattern_priority_map[pattern] = len(g.priority_config) - i
 
-        log.info(f"📊 模式优先级映射: {pattern_priority_map}")
-        log.info(f"📋 当前策略优先级: {' > '.join(g.priority_config)}")
+#         log.info(f"📊 模式优先级映射: {pattern_priority_map}")
+#         log.info(f"📋 当前策略优先级: {' > '.join(g.priority_config)}")
 
         # ========== 2. 创建股票到模式的映射（按优先级顺序） ==========
         # 一只股票可能同时落入多个模式。
@@ -3739,8 +3747,8 @@ def sort_stocks_by_priority(qualified_stocks, lblt_stocks, gk_stocks, rzq_stocks
         result_stocks = [item['stock'] for item in sorted_stocks[:g.position_limit]]
 
         # ========== 6. 输出详细日志 ==========
-        log.info("=" * 60)
-        log.info("📊 股票排序详情（按模式优先级和评分）:")
+#         log.info("=" * 60)
+#         log.info("📊 股票排序详情（按模式优先级和评分）:")
 
         # 模式名称映射
         pattern_name_map = {
@@ -3758,23 +3766,23 @@ def sort_stocks_by_priority(qualified_stocks, lblt_stocks, gk_stocks, rzq_stocks
             pattern = item['pattern']
             pattern_count[pattern] = pattern_count.get(pattern, 0) + 1
 
-        log.info(f"📈 各模式股票数量: {pattern_count}")
-        log.info("-" * 60)
+#         log.info(f"📈 各模式股票数量: {pattern_count}")
+#         log.info("-" * 60)
 
         # 输出每只股票的详细信息
         for i, item in enumerate(sorted_stocks):
             pattern_name = pattern_name_map.get(item['pattern'], "未知模式")
             selected = "✓" if i < g.position_limit else " "
 
-            log.info(
-                f"{selected} {i + 1:2d}. {item['stock']:12s} | "
-                f"模式: {pattern_name:8s} | "
-                f"优先级: {item['priority']} | "
-                f"评分: {item['score']:2d}"
-            )
+#             log.info(
+#                 f"{selected} {i + 1:2d}. {item['stock']:12s} | "
+#                 f"模式: {pattern_name:8s} | "
+#                 f"优先级: {item['priority']} | "
+#                 f"评分: {item['score']:2d}"
+#             )
 
-        log.info("=" * 60)
-        log.info(f"✅ 最终选择 {len(result_stocks)} 只股票: {result_stocks}")
+#         log.info("=" * 60)
+#         log.info(f"✅ 最终选择 {len(result_stocks)} 只股票: {result_stocks}")
 
         # ========== 7. 输出选中股票的模式分布 ==========
         selected_pattern_count = {}
@@ -3783,15 +3791,15 @@ def sort_stocks_by_priority(qualified_stocks, lblt_stocks, gk_stocks, rzq_stocks
             pattern_name = pattern_name_map.get(pattern, "未知")
             selected_pattern_count[pattern_name] = selected_pattern_count.get(pattern_name, 0) + 1
 
-        log.info(f"📊 选中股票模式分布: {selected_pattern_count}")
-        log.info("=" * 60)
+#         log.info(f"📊 选中股票模式分布: {selected_pattern_count}")
+#         log.info("=" * 60)
 
         return result_stocks
 
     except Exception as e:
-        log.error(f"❌ 股票排序失败: {str(e)}")
+#         log.error(f"❌ 股票排序失败: {str(e)}")
         import traceback
-        log.error(traceback.format_exc())
+#         log.error(traceback.format_exc())
         # 返回原始列表
         return qualified_stocks[:g.position_limit]
 
@@ -3859,19 +3867,22 @@ def get_volume_data(stock_code, context=None):
             if last_2_volume > 0:
                 trade_volume_ra = round(last_volume / last_2_volume, 4)
             else:
-                log.warning(f"[量能比计算警告] {stock_code} 前一天成交量为0，无法计算量能比")
+#                 log.warning(f"[量能比计算警告] {stock_code} 前一天成交量为0，无法计算量能比")
 
+                pass
         else:
-            log.warning(
-                f"[量能数据不足] {stock_code} 有效交易日不足2天，获取到{len(vol_hist) if vol_hist is not None else 0}天数据")
+#             log.warning(
+#                 f"[量能数据不足] {stock_code} 有效交易日不足2天，获取到{len(vol_hist) if vol_hist is not None else 0}天数据")
 
         # 将结果存入缓存
+            pass
         if cache_key:
             g.volume_data_cache[cache_key] = (last_volume, last_2_volume, trade_volume_ra)
 
     except Exception as e:
-        log.error(f"[量能获取失败] {stock_code} 错误原因: {str(e)}")
+#         log.error(f"[量能获取失败] {stock_code} 错误原因: {str(e)}")
 
+        pass
     return last_volume, last_2_volume, trade_volume_ra
 
 
@@ -3897,12 +3908,12 @@ def optimize_friday_trading_logic(context, qualified_stocks):
     filtered_stocks = []
     current_data = get_current_data()
 
-    log.info(f"股票g.score_cache 的评分内容 {g.score_cache}")
+#     log.info(f"股票g.score_cache 的评分内容 {g.score_cache}")
     for stock in qualified_stocks:
         try:
             # 检查评分缓存是否存在
             if stock not in g.score_cache:
-                log.warning(f"股票 {stock} 的评分未在缓存中找到，跳过")
+#                 log.warning(f"股票 {stock} 的评分未在缓存中找到，跳过")
                 continue
 
             # 从缓存中获取评分结果
@@ -3917,9 +3928,9 @@ def optimize_friday_trading_logic(context, qualified_stocks):
             # 新增条件：开盘价比现价高2%以上（开盘价 > 现价 * 1.02）
             # 避免价格为0导致计算错误
             if current_price <= 0:
-                log.warning(f"股票 {stock} 当前价格为0，跳过价格条件判断")
+#                 log.warning(f"股票 {stock} 当前价格为0，跳过价格条件判断")
                 continue
-            log.info(f"股票 {stock} 当前价格为{current_price}，open_price:{open_price}")
+#             log.info(f"股票 {stock} 当前价格为{current_price}，open_price:{open_price}")
             open_vs_current = open_price > current_price * 1.02  # 开盘价较现价高2%以上
 
             # 修复bug：补全context参数，与buy主代码调用方式一致，避免函数执行失败
@@ -3951,7 +3962,6 @@ def optimize_friday_trading_logic(context, qualified_stocks):
             # 条件6: 买入原因优先级 - 适配修复后的get_buy_reason，增加健壮性兜底
             buy_reason = get_buy_reason(stock, context)
             # 增加日志：记录获取到的买入原因，便于周五筛选问题排查
-            log.info(f"股票 {stock} 周五筛选获取买入原因：{buy_reason}")
             # 定义核心高优先级原因（连板龙头/弱转强），其余均按普通股票处理
             high_priority_reasons = ['连板龙头', '弱转强']
             if buy_reason in high_priority_reasons:
@@ -3968,12 +3978,12 @@ def optimize_friday_trading_logic(context, qualified_stocks):
             if all(conditions):
                 filtered_stocks.append(stock)
 
-                log.info(f"✅ {stock} 符合尾盘买入条件 - "
-                         f"评分:{total_score} 量能:{volume_energy:.2f} "
-                         f"开盘/现价:{open_price:.2f}/{current_price:.2f}（高{((open_price / current_price) - 1) * 100:.2f}%） "
-                         f"原因:{buy_reason} 市场:{trend}")
+#                 log.info(f"✅ {stock} 符合尾盘买入条件 - "
+#                          f"评分:{total_score} 量能:{volume_energy:.2f} "
+#                          f"开盘/现价:{open_price:.2f}/{current_price:.2f}（高{((open_price / current_price) - 1) * 100:.2f}%） "
+#                          f"原因:{buy_reason} 市场:{trend}")
         except Exception as e:
-            log.error(f"筛选 {stock} 出错：{str(e)}，跳过该股票")
+#             log.error(f"筛选 {stock} 出错：{str(e)}，跳过该股票")
             continue
     return filtered_stocks
 
@@ -4002,20 +4012,20 @@ def calculate_ma5(stock, context):
 
         # 检查数据有效性（至少需要5个有效交易日数据）
         if hist_data is None or len(hist_data) < 5:
-            log.warning(
-                f"股票 {stock} 有效交易日不足5天，当前可用数据量: {len(hist_data) if hist_data is not None else 0}")
+#             log.warning(
+#                 f"股票 {stock} 有效交易日不足5天，当前可用数据量: {len(hist_data) if hist_data is not None else 0}")
             return 0.0
 
         # 计算5日收盘价平均值（即5日均线）
         ma5_value = hist_data['close'].mean()
 
         # 日志输出计算结果（调试用）
-        log.debug(f"股票 {stock} 5日均线计算完成: {ma5_value:.2f}（最近5日收盘价: {hist_data['close'].tolist()}）")
+#         log.debug(f"股票 {stock} 5日均线计算完成: {ma5_value:.2f}（最近5日收盘价: {hist_data['close'].tolist()}）")
 
         return ma5_value
 
     except Exception as e:
-        log.error(f"计算股票 {stock} 5日均线失败: {str(e)}")
+#         log.error(f"计算股票 {stock} 5日均线失败: {str(e)}")
         return 0.0
 
 
@@ -4026,7 +4036,7 @@ def clear_score_cache(context):
     """
     if hasattr(g, 'score_cache'):
         g.score_cache = {}
-        log.info("📭 评分缓存已清空")
+#         log.info("📭 评分缓存已清空")
     else:
         g.score_cache = {}
 
@@ -4073,7 +4083,7 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
                     close_price = hist_data.loc[hist_data.index.date == date, 'close'].values[0]
                     close_prices.append(close_price)
                 else:
-                    log.warning(f"{stock} 资金流日期 {date} 无对应收盘价数据")
+#                     log.warning(f"{stock} 资金流日期 {date} 无对应收盘价数据")
                     close_prices.append(0)  # 填充默认值
 
         # 4. 初始化 6 个因子分
@@ -4154,7 +4164,7 @@ def calculate_buy_score_optimized(stock, context, money_flow_map):
         }
 
     except Exception as e:
-        log.error(f"{stock} 买入评分计算失败：{str(e)}")
+#         log.error(f"{stock} 买入评分计算失败：{str(e)}")
         return {
             'total_score': 0,
             'factor1_涨停': 0,
@@ -4190,30 +4200,31 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
     try:
         # 1. 增强输入数据校验
         if not isinstance(fund_flow_list, list) or len(fund_flow_list) < 5:
-            log.warning(
-                f"{stock} 资金流数据无效（非列表或不足5天），实际{len(fund_flow_list) if isinstance(fund_flow_list, list) else '非列表'}天，评0分")
+#             log.warning(
+#                 f"{stock} 资金流数据无效（非列表或不足5天），实际{len(fund_flow_list) if isinstance(fund_flow_list, list) else '非列表'}天，评0分")
             return 0
 
         required_fields = ['date', 'net_amount_main']
         for i, flow in enumerate(fund_flow_list):
             if not isinstance(flow, dict):
-                log.warning(f"{stock} 资金流第{i + 1}条数据非字典格式，评0分")
+#                 log.warning(f"{stock} 资金流第{i + 1}条数据非字典格式，评0分")
                 return 0
             missing_fields = [f for f in required_fields if f not in flow]
             if missing_fields:
-                log.warning(f"{stock} 资金流第{i + 1}条缺失字段{missing_fields}，评0分")
+#                 log.warning(f"{stock} 资金流第{i + 1}条缺失字段{missing_fields}，评0分")
                 return 0
 
         if not isinstance(close_prices, list) or len(close_prices) != len(fund_flow_list):
-            log.warning(
-                f"{stock} 收盘价数据无效（非列表或长度不匹配），资金流{len(fund_flow_list)}条，收盘价{len(close_prices) if isinstance(close_prices, list) else '非列表'}条")
+#             log.warning(
+#                 f"{stock} 收盘价数据无效（非列表或长度不匹配），资金流{len(fund_flow_list)}条，收盘价{len(close_prices) if isinstance(close_prices, list) else '非列表'}条")
 
         # 2. 数据预处理（去重+排序）
+            pass
         hist_data = pd.DataFrame(fund_flow_list)
         hist_data['date'] = pd.to_datetime(hist_data['date'], errors='coerce')
         hist_data = hist_data.dropna(subset=['date'])
         if len(hist_data) < 5:
-            log.warning(f"{stock} 有效资金流数据不足5天（去重后{len(hist_data)}天），评0分")
+#             log.warning(f"{stock} 有效资金流数据不足5天（去重后{len(hist_data)}天），评0分")
             return 0
 
         hist_data = hist_data.drop_duplicates(subset=['date'], keep='last')
@@ -4250,7 +4261,7 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
             valuation_data = get_valuation(stock, end_date=latest_date.strftime('%Y-%m-%d'),
                                            count=1, fields=['circulating_market_cap'])
             if valuation_data.empty:
-                log.warning(f"{stock} 无法获取流通市值数据，使用默认评分逻辑")
+#                 log.warning(f"{stock} 无法获取流通市值数据，使用默认评分逻辑")
                 circ_market_cap = None
                 flow_to_market_ratio = None
             else:
@@ -4259,7 +4270,7 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
                 # 资金流入占流通市值比例（百分比）
                 flow_to_market_ratio = latest_main / (circ_market_cap * 10000) if circ_market_cap > 0 else 0
         except Exception as e:
-            log.warning(f"{stock} 获取流通市值失败: {str(e)}，使用默认评分逻辑")
+#             log.warning(f"{stock} 获取流通市值失败: {str(e)}，使用默认评分逻辑")
             circ_market_cap = None
             flow_to_market_ratio = None
 
@@ -4400,29 +4411,29 @@ def calculate_main_force_flow_score(stock, fund_flow_list, close_prices):
         if circ_market_cap is not None:
             market_cap_info = f"流通市值: {circ_market_cap:.2f}亿元，资金流入占比: {flow_to_market_ratio * 100:.4f}%，"
 
-        log.info(
-            f"{stock} 资金流评分明细：\n"
-            f"  近5日净流入数据: {[round(x, 2) for x in recent_5d_main]}\n"
-            f"  近5日MA5净流入: {ma5_flow:.2f}，前一交易日净流入: {latest_main:.2f}\n"
-            f"  {market_cap_info}\n"
-            f"  资金流入比例评分: {ratio_desc} → {ratio_score}分 (权重{ratio_weight * 100}%)\n"
-            f"  绝对资金规模评分: {absolute_desc}（{latest_main:.2f}万） → {absolute_score}分 (权重{absolute_weight * 100}%)\n"
-            f"  资金模式评分: {pattern_desc} → {pattern_score}分 (权重{pattern_weight * 100}%)\n"
-            f"  近5日是否逐步递增: {'是' if is_increasing else '否'} (仅供参考)\n"
-            f"  加权总分: {weighted_score:.2f} → 最终总分: {total}"
-        )
+#         log.info(
+#             f"{stock} 资金流评分明细：\n"
+#             f"  近5日净流入数据: {[round(x, 2) for x in recent_5d_main]}\n"
+#             f"  近5日MA5净流入: {ma5_flow:.2f}，前一交易日净流入: {latest_main:.2f}\n"
+#             f"  {market_cap_info}\n"
+#             f"  资金流入比例评分: {ratio_desc} → {ratio_score}分 (权重{ratio_weight * 100}%)\n"
+#             f"  绝对资金规模评分: {absolute_desc}（{latest_main:.2f}万） → {absolute_score}分 (权重{absolute_weight * 100}%)\n"
+#             f"  资金模式评分: {pattern_desc} → {pattern_score}分 (权重{pattern_weight * 100}%)\n"
+#             f"  近5日是否逐步递增: {'是' if is_increasing else '否'} (仅供参考)\n"
+#             f"  加权总分: {weighted_score:.2f} → 最终总分: {total}"
+#         )
         return total
 
     except KeyError as e:
-        log.error(f"{stock} 资金流字段缺失: {str(e)}")
+#         log.error(f"{stock} 资金流字段缺失: {str(e)}")
         return 0
     except IndexError as e:
-        log.error(f"{stock} 数据索引错误: {str(e)}")
+#         log.error(f"{stock} 数据索引错误: {str(e)}")
         return 0
     except Exception as e:
-        log.error(f"{stock} 资金流评分计算失败: {str(e)}")
+#         log.error(f"{stock} 资金流评分计算失败: {str(e)}")
         import traceback
-        log.error(traceback.format_exc())
+#         log.error(traceback.format_exc())
         return 0
 
 
@@ -4439,11 +4450,13 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
     说明这只票有较强的短线攻击性。
 
     参数:
+    pass
     stock: 股票代码
     context: 聚宽上下文
     hist_data: 历史数据（可选，如果不提供则内部获取）
 
     返回:
+    pass
     int: 涨停评分 (0-5分)
     """
     try:
@@ -4477,7 +4490,7 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
         if relative_diff <= 0.001:
             score += 3
             log_msg = f"{stock} 昨日涨停（收盘价: {yesterday_close:.2f}, 涨停价: {yesterday_high_limit:.2f}, 相对误差: {relative_diff:.4%}），+3分"
-            log.debug(log_msg)
+#             log.debug(log_msg)
 
         # 精细化接近涨停判断
         else:
@@ -4485,13 +4498,13 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
             if (yesterday_close >= yesterday_high_limit * 0.95) and (yesterday_high >= yesterday_high_limit * 0.995):
                 score += 2
                 log_msg = f"{stock} 昨日冲板未封死（收盘价: {yesterday_close:.2f}, 最高价: {yesterday_high:.2f}），+2分"
-                log.debug(log_msg)
+#                 log.debug(log_msg)
 
             # 情况2：仅收盘价≥95%涨停价（未冲板）
             elif yesterday_close >= yesterday_high_limit * 0.95:
                 score += 1
                 log_msg = f"{stock} 昨日收盘价接近涨停（{yesterday_close:.2f}/{yesterday_high_limit:.2f}），+1分"
-                log.debug(log_msg)
+#                 log.debug(log_msg)
 
         # 2. 量能质量：同样是涨停，放量涨停通常比缩量涨停更有辨识度
         yesterday_volume = hist_data['volume'].iloc[-1]  # 修复：昨日成交量取最后一条
@@ -4506,11 +4519,11 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
         if yesterday_volume > avg_volume * 1.5:
             score += 2
             log_msg = f"{stock} 放量涨停（昨日成交量: {yesterday_volume}, 平均成交量: {avg_volume:.2f}），+2分"
-            log.debug(log_msg)
+#             log.debug(log_msg)
         elif yesterday_volume > avg_volume * 1.2:
             score += 1
             log_msg = f"{stock} 适度放量涨停（昨日成交量: {yesterday_volume}, 平均成交量: {avg_volume:.2f}），+1分"
-            log.debug(log_msg)
+#             log.debug(log_msg)
 
         final_score = min(score, 5)
 
@@ -4518,7 +4531,7 @@ def calculate_limit_up_score_optimized(stock, context, hist_data=None):
 
     except Exception as e:
         error_msg = f"计算涨停评分失败 {stock}: {str(e)}"
-        log.error(error_msg)
+#         log.error(error_msg)
         return 0
 
 
@@ -4542,7 +4555,7 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
 
         # 数据有效性校验（至少需要10个交易日数据）
         if hist_data.empty or len(hist_data) < 10:
-            log.warning(f"{stock} 历史数据不足10个交易日，技术评分为0")
+#             log.warning(f"{stock} 历史数据不足10个交易日，技术评分为0")
             return 0
 
         score = 0
@@ -4570,7 +4583,7 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
         else:  # >5个涨停
             limit_up_score = 5
 
-        log.debug(f"{stock} 近10日涨停数: {limit_up_count}，活跃度得分: {limit_up_score}")
+#         log.debug(f"{stock} 近10日涨停数: {limit_up_count}，活跃度得分: {limit_up_score}")
         score += limit_up_score  # 加入总评分
 
         # 3. 均线结构
@@ -4584,15 +4597,16 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
             # 多头排列判断
             if current_price > ma5 > ma10 > ma20:
                 score += 2
-                log.debug(f"{stock} 均线多头排列（强），+2分")
+#                 log.debug(f"{stock} 均线多头排列（强），+2分")
             elif current_price > ma5 > ma10:
                 score += 1
-                log.debug(f"{stock} 均线多头排列（弱），+1分")
+#                 log.debug(f"{stock} 均线多头排列（弱），+1分")
             else:
-                log.debug(f"{stock} 非多头排列，均线得0分")
+#                 log.debug(f"{stock} 非多头排列，均线得0分")
 
         # 4. RSI
         # 不是越高越好，太高太低都可能意味着位置不舒服。
+                pass
         if len(close_prices) >= 14:
             rsi = calculate_rsi(close_prices, 14)
             rsi_score = 0
@@ -4601,7 +4615,7 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
             if 40 <= rsi <= 60:
                 rsi_score += 1
             score += rsi_score
-            log.debug(f"{stock} RSI({rsi:.1f})得分: {rsi_score}")
+#             log.debug(f"{stock} RSI({rsi:.1f})得分: {rsi_score}")
 
         # 5. 价格区间位置
         # 当前价处于20日区间上半部，说明相对更强。
@@ -4613,17 +4627,18 @@ def calculate_technical_score_optimized(stock, context, hist_data=None):
             # 避免高低点相同导致除零错误
             if high_20 > low_20 and current_price > (high_20 + low_20) / 2:
                 score += 1
-                log.debug(f"{stock} 价格在20日区间上半部分，+1分")
+#                 log.debug(f"{stock} 价格在20日区间上半部分，+1分")
             else:
-                log.debug(f"{stock} 价格在20日区间下半部分，位置得0分")
+#                 log.debug(f"{stock} 价格在20日区间下半部分，位置得0分")
 
         # 总分上限调整为10分（活跃度5分+原有技术分5分）
+                pass
         final_score = min(score, 10)
-        log.debug(f"{stock} 最终技术评分: {final_score}")
+#         log.debug(f"{stock} 最终技术评分: {final_score}")
         return final_score
 
     except Exception as e:
-        log.error(f"计算技术评分失败 {stock}: {str(e)}")
+#         log.error(f"计算技术评分失败 {stock}: {str(e)}")
         return 0
 
 
@@ -4695,7 +4710,7 @@ def calculate_volume_ma_score_optimized(stock, context, hist_data=None):
         return min(score, 5)  # 最高5分
 
     except Exception as e:
-        log.error(f"计算放量MA评分失败 {stock}: {str(e)}")
+#         log.error(f"计算放量MA评分失败 {stock}: {str(e)}")
         return 0
 
 
@@ -4704,27 +4719,28 @@ def calculate_volume_ma_score_optimized(stock, context, hist_data=None):
 def record_closing_stats(context):
     """盘后数据统计函数（优化版）"""
     try:
-        log.info("\n" + "=" * 60)
-        log.info(f"==== 盘后数据统计 [{context.current_dt.strftime('%Y-%m-%d %H:%M')}] ====")
+#         log.info("\n" + "=" * 60)
+#         log.info(f"==== 盘后数据统计 [{context.current_dt.strftime('%Y-%m-%d %H:%M')}] ====")
 
         # 1. 账户核心信息统计
         portfolio = context.portfolio
         account_stats = {
-            "总权益": round(portfolio.total_value, 2),
-            "可用资金": round(portfolio.available_cash, 2),
+            # "总权益": round(portfolio.total_value, 2),
+            # "可用资金": round(portfolio.available_cash, 2),
             "持仓总价值": round(portfolio.positions_value, 2),
-            "累计出入金": round(portfolio.inout_cash, 2),
-            "累计收益": f"{portfolio.returns:.2%}",
-            "初始资金": round(portfolio.starting_cash, 2),
-            "可取资金": round(portfolio.transferable_cash, 2),
-            "锁住资金": round(portfolio.locked_cash, 2)
+            # "累计出入金": round(portfolio.inout_cash, 2),
+            # "累计收益": f"{portfolio.returns:.2%}",
+            # "初始资金": round(portfolio.starting_cash, 2),
+            # "可取资金": round(portfolio.transferable_cash, 2),
+            # "锁住资金": round(portfolio.locked_cash, 2)
         }
 
-        log.info("\n----- 账户核心信息 -----")
+        # log.info("\n----- 账户核心信息 -----")
         for key, value in account_stats.items():
             log.info(f"{key}: {value}")
 
         # 2. 持仓标的统计（替代valid_stocks逻辑）
+            pass
         valid_stocks = []
         long_positions = portfolio.long_positions
         short_positions = portfolio.short_positions
@@ -4739,13 +4755,13 @@ def record_closing_stats(context):
 
         # 去重处理
         valid_stocks = list(set(valid_stocks))
-        log.info(f"\n----- 持仓概览 -----")
-        log.info(f"有效持仓标的数量: {len(valid_stocks)}")
-        log.info(f"多单持仓数量: {long_count}")
-        log.info(f"空单持仓数量: {short_count}")
+#         log.info(f"\n----- 持仓概览 -----")
+#         log.info(f"有效持仓标的数量: {len(valid_stocks)}")
+#         log.info(f"多单持仓数量: {long_count}")
+#         log.info(f"空单持仓数量: {short_count}")
 
         # 3. 多单持仓详情
-        log.info("\n----- 多单持仓详情 -----")
+#         log.info("\n----- 多单持仓详情 -----")
         if long_positions:
             for pos in long_positions.values():
                 if pos.total_amount <= 0:
@@ -4759,12 +4775,13 @@ def record_closing_stats(context):
                     f"累计成本: {pos.acc_avg_cost:.2f} | "
                     f"建仓时间: {pos.init_time.strftime('%Y-%m-%d')}"
                 )
-                log.info(pos_info)
+#                 log.info(pos_info)
         else:
-            log.info("无多单持仓")
+#             log.info("无多单持仓")
 
         # 4. 空单持仓详情
-        log.info("\n----- 空单持仓详情 -----")
+#         log.info("\n----- 空单持仓详情 -----")
+            pass
         if short_positions:
             for pos in short_positions.values():
                 if pos.total_amount <= 0:
@@ -4778,11 +4795,12 @@ def record_closing_stats(context):
                     f"累计成本: {pos.acc_avg_cost:.2f} | "
                     f"建仓时间: {pos.init_time.strftime('%Y-%m-%d')}"
                 )
-                log.info(pos_info)
+#                 log.info(pos_info)
         else:
-            log.info("无空单持仓")
+#             log.info("无空单持仓")
 
         # 5. 交易统计更新
+            pass
         if hasattr(g, 'trade_stats'):
             # 记录当日收益
             current_return = (portfolio.total_value / portfolio.starting_cash) - 1
@@ -4798,20 +4816,20 @@ def record_closing_stats(context):
                 "total_value": portfolio.total_value
             }
 
-            log.info("\n----- 交易统计更新 -----")
-            log.info(f"当日收益: {current_return:.2%}")
-            log.info(f"累计交易日: {len(g.trade_stats['daily_returns'])}")
+#             log.info("\n----- 交易统计更新 -----")
+#             log.info(f"当日收益: {current_return:.2%}")
+#             log.info(f"累计交易日: {len(g.trade_stats['daily_returns'])}")
 
         # 6. 热门概念缓存状态
-        log.info(f"\n----- 系统状态 -----")
-        log.info(f"热门概念缓存状态: {check_cache_status()}")
-        log.info("=" * 60 + "\n")
+#         log.info(f"\n----- 系统状态 -----")
+#         log.info(f"热门概念缓存状态: {check_cache_status()}")
+#         log.info("=" * 60 + "\n")
 
     except Exception as e:
-        log.error(f"{context.current_dt.strftime('%Y-%m-%d %H:%M:%S')} - ERROR - 盘后数据统计失败: {str(e)}")
+#         log.error(f"{context.current_dt.strftime('%Y-%m-%d %H:%M:%S')} - ERROR - 盘后数据统计失败: {str(e)}")
         import traceback
-        log.error(
-            f"{context.current_dt.strftime('%Y-%m-%d %H:%M:%S')} - ERROR - Traceback (most recent call last):\n{traceback.format_exc()}")
+#         log.error(
+#             f"{context.current_dt.strftime('%Y-%m-%d %H:%M:%S')} - ERROR - Traceback (most recent call last):\n{traceback.format_exc()}")
 
 
 # 5. 辅助函数
@@ -4825,9 +4843,11 @@ def get_buy_reason(stock, context):
     2. 某些场景下，按模式区分不同阈值。
 
     参数:
+    pass
     stock: 股票代码
     context: 上下文对象
     返回:
+    pass
     买入原因描述
     """
     try:
@@ -4846,7 +4866,7 @@ def get_buy_reason(stock, context):
         else:
             return "无特定模式"
     except Exception as e:
-        log.error(f"获取 {stock} 买入原因失败: {str(e)}")
+#         log.error(f"获取 {stock} 买入原因失败: {str(e)}")
         return "未知原因"
 
 
@@ -4926,7 +4946,7 @@ def rise_low_volume(s, context):  # 上涨时，未放量 rising on low volume
     try:
         hist = attribute_history(s, 106, '1d', fields=['high', 'volume'], skip_paused=True, df=False)
         if hist is None or len(hist['high']) < 102:
-            log.info(f"左压检查 {s}: 历史数据不足102天，跳过检查，返回False")
+#             log.info(f"左压检查 {s}: 历史数据不足102天，跳过检查，返回False")
             return False
 
         high_prices = hist['high'][:102]
@@ -4937,7 +4957,7 @@ def rise_low_volume(s, context):  # 上涨时，未放量 rising on low volume
 
         # 确保索引有效
         if zyts > len(hist['volume']):
-            log.info(f"左压检查 {s}: zyts={zyts} 超出数据长度，返回False")
+#             log.info(f"左压检查 {s}: zyts={zyts} 超出数据长度，返回False")
             return False
 
         last_volume = hist['volume'][-1]
@@ -4945,11 +4965,12 @@ def rise_low_volume(s, context):  # 上涨时，未放量 rising on low volume
         condition = last_volume <= max_volume_past * 0.9 if max_volume_past > 0 else False
         
         if condition == False:
-            log.info(f"左压检查 {s}: prev_high={prev_high:.2f}, zyts={zyts}, 最近成交量={last_volume}, "
-                 f"过去{zyts - 1}天最大成交量={max_volume_past}, 条件(最近<=过去最大*0.9)={condition}, 返回{condition}")
+#             log.info(f"左压检查 {s}: prev_high={prev_high:.2f}, zyts={zyts}, 最近成交量={last_volume}, "
+#                  f"过去{zyts - 1}天最大成交量={max_volume_past}, 条件(最近<=过去最大*0.9)={condition}, 返回{condition}")
+            pass
         return condition
     except Exception as e:
-        log.error(f"左压检查 {s} 出错: {e}")
+#         log.error(f"左压检查 {s} 出错: {e}")
         return False
 
 
@@ -5055,19 +5076,21 @@ def record_sell_trade(context, stock, reason, details, current_data, date):
         if not hasattr(g, 'today_trades'):
             g.today_trades = []
         g.today_trades.append(trade_record)
+        log.info(f"卖出执行: {stock}, 原因={reason}, 价格={current_price:.2f}, 盈亏={profit_pct:.2%}")
 
         # 关键：更新上一笔交易信息
         g.last_trade_info = {
             'date': context.current_dt.date(),
             'profit_pct': profit_pct
         }
-        log.info(f"更新上一笔交易信息: {g.last_trade_info}")
+#         log.info(f"更新上一笔交易信息: {g.last_trade_info}")
 
     except Exception as e:
-        log.error(f"记录卖出交易失败: {str(e)}")
+#         log.error(f"记录卖出交易失败: {str(e)}")
 
 
 # ================== 安全历史数据封装 ==================
+        pass
 ALLOWED_FIELDS = {
     'open', 'close', 'high', 'low', 'volume', 'money', 'avg',
     'high_limit', 'low_limit', 'pre_close', 'paused', 'factor', 'open_interest'
@@ -5146,7 +5169,7 @@ def get_5min_volume_ratio(stock, context, period=5):
             df=True
         )
         if bars is None or len(bars) < period + 1:
-            log.debug(f"{stock} 5分钟K线数据不足{period + 1}根，实际{len(bars) if bars is not None else 0}")
+#             log.debug(f"{stock} 5分钟K线数据不足{period + 1}根，实际{len(bars) if bars is not None else 0}")
             return None
 
         # 最新一根（当前K线）的成交量
@@ -5163,7 +5186,7 @@ def get_5min_volume_ratio(stock, context, period=5):
         ratio = current_vol / prev_vols.mean()
         return ratio
     except Exception as e:
-        log.error(f"获取{stock}5分钟量比失败: {e}")
+#         log.error(f"获取{stock}5分钟量比失败: {e}")
         return None
 
 
@@ -5194,7 +5217,7 @@ def get_1min_volume_ratio(stock, context, period=5):
             return None
         return current_vol / prev_vols.mean()
     except Exception as e:
-        log.error(f"获取{stock}1分钟量比失败: {e}")
+#         log.error(f"获取{stock}1分钟量比失败: {e}")
         return None
 
 
@@ -5258,7 +5281,7 @@ def sell2(context):
 
             # 跳过停牌股票
             if current_data[stock].paused:
-                log.info(f"{stock} 今日停牌，跳过卖出检查")
+#                 log.info(f"{stock} 今日停牌，跳过卖出检查")
                 continue
 
             # 上午时间段卖出策略
@@ -5280,8 +5303,9 @@ def sell2(context):
                             record_sell_trade(context, stock, "月初不涨停时间止损", details, current_data, date)
                             order_target_value(stock, 0)
                 except Exception as e:
-                    log.error(f"{stock} 月初止损策略执行失败: {str(e)}")
+#                     log.error(f"{stock} 月初止损策略执行失败: {str(e)}")
                 # 2. 低于昨日收盘价策略（需放量确认）
+                    pass
                 try:
                     price_df = get_price(
                         stock,
@@ -5306,22 +5330,24 @@ def sell2(context):
                                 record_sell_trade(context, stock, "低于昨日收盘价（放量确认）", details, current_data, date)
                                 order_target_value(stock, 0)
                             else:
-                                log.info(f"{stock} 低于昨日收盘价但未放量（量比{vol_ratio}），暂不卖出")
+#                                 log.info(f"{stock} 低于昨日收盘价但未放量（量比{vol_ratio}），暂不卖出")
+                                pass
                 except Exception as e:
-                    log.error(f"{stock} 昨日收盘价策略执行失败: {str(e)}")
+#                     log.error(f"{stock} 昨日收盘价策略执行失败: {str(e)}")
 
             # ==================== 下午14:50止盈策略 ====================
+                    pass
             if is_profit_taking_time:
                 try:
                     sdf = hist_map.get(stock)
                     if sdf is None or len(sdf) < 2:
-                        log.warning(f"{stock} 无法获取昨收，跳过止盈计算")
+#                         log.warning(f"{stock} 无法获取昨收，跳过止盈计算")
                         continue
                     yesterday_close = float(sdf['close'].iloc[-1])
 
                     # 安全检查：避免除零错误
                     if avg_cost == 0:
-                        log.warning(f"{stock} 平均成本为0，跳过止盈计算")
+#                         log.warning(f"{stock} 平均成本为0，跳过止盈计算")
                         continue
 
                     # 止盈条件,量能过大：
@@ -5348,7 +5374,7 @@ def sell2(context):
 
                     # ---------------------- 步骤2：数据基础校验 ----------------------
                     if min5_bars.empty or 'volume' not in min5_bars.columns or 'date' not in min5_bars.columns:
-                        log.warning(f"{stock} 5分钟K线获取失败（空数据/缺字段），跳过量能卖出")
+#                         log.warning(f"{stock} 5分钟K线获取失败（空数据/缺字段），跳过量能卖出")
                         continue
                     # 转换date为datetime格式，方便筛选当日数据
                     min5_bars['date'] = pd.to_datetime(min5_bars['date'])
@@ -5356,7 +5382,7 @@ def sell2(context):
                     # ---------------------- 步骤3：筛选【当日】的5分钟K线，避免混入前日数据 ----------------------
                     min5_bars_today = min5_bars[min5_bars['date'].dt.date == today_date].copy()
                     if min5_bars_today.empty:
-                        log.warning(f"{stock} 5分钟K线中无当日数据，跳过量能卖出")
+#                         log.warning(f"{stock} 5分钟K线中无当日数据，跳过量能卖出")
                         continue
 
                     # ---------------------- 步骤4：汇总当日累计成交量（14:50真实成交） ----------------------
@@ -5364,7 +5390,7 @@ def sell2(context):
                     curr_5min_bar_count = len(min5_bars_today)  # 当日已交易5分钟K线数
                     # 过滤异常成交量（累计成交为0/极少）
                     if today_curr_vol_share < 100:
-                        log.warning(f"{stock} 当日累计成交量异常（{today_curr_vol_share:.0f}股），跳过量能卖出")
+#                         log.warning(f"{stock} 当日累计成交量异常（{today_curr_vol_share:.0f}股），跳过量能卖出")
                         continue
 
                     # ---------------------- 步骤5：获取【前日完整成交量】（精准无偏差） ----------------------
@@ -5377,11 +5403,11 @@ def sell2(context):
                         df=True
                     )
                     if pre_day_vol_data.empty:
-                        log.warning(f"{stock} 前日成交量获取失败，跳过量能卖出")
+#                         log.warning(f"{stock} 前日成交量获取失败，跳过量能卖出")
                         continue
                     pre_day_vol_share = pre_day_vol_data['volume'].iloc[0]  # 前日成交量（股）
                     if pre_day_vol_share < 100:
-                        log.warning(f"{stock} 前日成交量异常（{pre_day_vol_share:.0f}股），跳过量能卖出")
+#                         log.warning(f"{stock} 前日成交量异常（{pre_day_vol_share:.0f}股），跳过量能卖出")
                         continue
 
                     # ---------------------- 步骤6：单位转换（股 → 万手），和你的实际数值对齐 ----------------------
@@ -5401,13 +5427,13 @@ def sell2(context):
                     final_vol_ratio = max(vol_ratio_curr, vol_ratio_est)  # 最终判定倍数（兜底取大）
 
                     # ---------------------- 步骤9：全量日志打印（精准排查，和你的实际数值对比） ----------------------
-                    log.info(f"📊 {stock} 14:50量能详情（5min K线精准汇总）：")
-                    log.info(f"   前日成交量：{pre_day_vol_share:,.0f}股 | {pre_day_vol_10khand:.2f}万手")
-                    log.info(f"   当日已交易5min K线：{curr_5min_bar_count}根 / 全天{TOTAL_5MIN_BAR}根")
-                    log.info(f"   当日累计成交：{today_curr_vol_share:,.0f}股 | {today_curr_vol_10khand:.2f}万手")
-                    log.info(f"   估算全天成交：{today_est_vol_share:,.0f}股 | {today_est_vol_10khand:.2f}万手")
-                    log.info(
-                        f"   估算系数：{estimate_coeff:.3f} | 累计倍数：{vol_ratio_curr:.2f} | 估算倍数：{vol_ratio_est:.2f} | 最终倍数：{final_vol_ratio:.2f}")
+#                     log.info(f"📊 {stock} 14:50量能详情（5min K线精准汇总）：")
+#                     log.info(f"   前日成交量：{pre_day_vol_share:,.0f}股 | {pre_day_vol_10khand:.2f}万手")
+#                     log.info(f"   当日已交易5min K线：{curr_5min_bar_count}根 / 全天{TOTAL_5MIN_BAR}根")
+#                     log.info(f"   当日累计成交：{today_curr_vol_share:,.0f}股 | {today_curr_vol_10khand:.2f}万手")
+#                     log.info(f"   估算全天成交：{today_est_vol_share:,.0f}股 | {today_est_vol_10khand:.2f}万手")
+#                     log.info(
+#                         f"   估算系数：{estimate_coeff:.3f} | 累计倍数：{vol_ratio_curr:.2f} | 估算倍数：{vol_ratio_est:.2f} | 最终倍数：{final_vol_ratio:.2f}")
 
                     # ---------------------- 步骤10：触发卖出（未涨停 + 放量止盈双档） ----------------------
                     details_base = {
@@ -5423,20 +5449,21 @@ def sell2(context):
                     if final_vol_ratio > 4:
                         record_sell_trade(context, stock, "尾盘放量4倍卖出(5min K线)", details_base, current_data, date)
                         order_target_value(stock, 0)
-                        log.info(f"📉 放量卖出 {stock}：最终倍数{final_vol_ratio:.2f}>4，未涨停，执行清仓！")
+#                         log.info(f"📉 放量卖出 {stock}：最终倍数{final_vol_ratio:.2f}>4，未涨停，执行清仓！")
                         continue
                     else:
-                        log.info(f"📊 {stock} 未满足放量卖出条件（最终倍数{final_vol_ratio:.2f}/4，未涨停）")
+#                         log.info(f"📊 {stock} 未满足放量卖出条件（最终倍数{final_vol_ratio:.2f}/4，未涨停）")
 
+                        pass
                 except Exception as e:
-                    log.error(f"止盈逻辑执行出错 {stock}: {str(e)}")
+#                     log.error(f"止盈逻辑执行出错 {stock}: {str(e)}")
                     continue
 
             # 下午时间段卖出策略
             if is_afternoon:
                 # 安全检查：避免除零错误
                 if avg_cost == 0:
-                    log.warning(f"{stock} 平均成本为0，跳过止损计算")
+#                     log.warning(f"{stock} 平均成本为0，跳过止损计算")
                     continue
 
                 # 计算止损/回撤比例
@@ -5447,7 +5474,7 @@ def sell2(context):
                 # 判定涨停：当前价格 >= 涨停价 - 1e-6（浮点数精度误差，避免0.0001的差价误判）
                 is_limit_up = current_price >= high_limit - 1e-6
                 if is_limit_up:
-                    log.info(f"{stock} 当前涨停（价:{current_price:.2f}/涨停:{high_limit:.2f}），跳过止损策略")
+#                     log.info(f"{stock} 当前涨停（价:{current_price:.2f}/涨停:{high_limit:.2f}），跳过止损策略")
                     # 仅跳过止损逻辑，不影响后续MA5、量价顶背离等策略
                     pass
                 # 未涨停时，才执行止损/涨停回撤卖出逻辑
@@ -5477,9 +5504,10 @@ def sell2(context):
                             record_sell_trade(context, stock, "跌破MA5均线", details, current_data, date)
                             order_target_value(stock, 0)
                 except Exception as e:
-                    log.error(f"{stock} MA5策略执行失败: {str(e)}")
+#                     log.error(f"{stock} MA5策略执行失败: {str(e)}")
 
                 # 4. 14:50尾盘：前日涨停+当日烂板放量+现价在均价线下方卖出
+                    pass
                 if is_profit_taking_time:
                     try:
                         sdf = hist_map.get(stock)
@@ -5515,12 +5543,13 @@ def sell2(context):
                                             }
                                             record_sell_trade(context, stock, "前日涨停烂板放量卖出", details, current_data, date)
                                             order_target_value(stock, 0)
-                                            log.info(f"🚨 {stock} 前日涨停烂板放量(est={est_ratio:.1f}x>1.8)且破均价(t_vwap={today_vwap:.2f})，尾盘卖出防利润回吐")
+#                                             log.info(f"🚨 {stock} 前日涨停烂板放量(est={est_ratio:.1f}x>1.8)且破均价(t_vwap={today_vwap:.2f})，尾盘卖出防利润回吐")
                                             continue
                     except Exception as e:
-                        log.error(f"{stock} 前日涨停烂板检测执行失败: {str(e)}")
+#                         log.error(f"{stock} 前日涨停烂板检测执行失败: {str(e)}")
 
             # 3. 新增：最近24根半小时K线量价顶背离策略（全局策略，无论上下午/是否涨停均执行）
+                        pass
             try:
                 # 获取最近24根半小时K线数据（包含最高价和成交量）
                 # frequency='30m'表示半小时K线，count=24获取最近24根
@@ -5535,8 +5564,8 @@ def sell2(context):
 
                 # 数据有效性校验
                 if kline_data is None or kline_data.empty or len(kline_data) < 24:
-                    log.warning(
-                        f"{stock} 无法获取足够的24根半小时K线数据（实际获取{len(kline_data) if kline_data is not None else 0}根），跳过量价顶背离检查")
+#                     log.warning(
+#                         f"{stock} 无法获取足够的24根半小时K线数据（实际获取{len(kline_data) if kline_data is not None else 0}根），跳过量价顶背离检查")
                     continue
 
                 # 提取24根K线的最高价和成交量
@@ -5549,7 +5578,7 @@ def sell2(context):
 
                 # 防护：避免最大成交量为0导致的计算问题
                 if max_volume <= 0:
-                    log.warning(f"{stock} 最近24根半小时K线最大成交量为0，跳过量价顶背离检查")
+#                     log.warning(f"{stock} 最近24根半小时K线最大成交量为0，跳过量价顶背离检查")
                     continue
 
                 # 最近一根K线的最高价和成交量
@@ -5587,6 +5616,7 @@ def sell2(context):
                       (last_kline_volume <= max_volume * 0.5) and
                       (price_drop_percent > 5.0)):
 
+                    pass
                     details = {
                         '24根K线最高': f"{max_high:.2f}",
                         '最近K线最高': f"{last_kline_high:.2f}",
@@ -5601,14 +5631,16 @@ def sell2(context):
                     order_target_value(stock, 0)
 
             except Exception as e:
-                log.error(f"{stock} 量价顶背离策略执行失败: {str(e)}")
+#                 log.error(f"{stock} 量价顶背离策略执行失败: {str(e)}")
 
 
+                pass
         except Exception as e:
-            log.error(f"处理 {stock} 卖出策略时发生错误: {str(e)}")
+#             log.error(f"处理 {stock} 卖出策略时发生错误: {str(e)}")
 
 
 # 计算股票处于一段时间内相对位置
+            pass
 def get_relative_position_df(stock_list, date, watch_days):
     if len(stock_list) != 0:
         df = get_price(stock_list, end_date=date, fields=['high', 'low', 'close'], count=watch_days, fill_paused=False,
