@@ -5,6 +5,7 @@
 # 增加5%缓冲资金防止股价上涨买不到票
 # 增加小白注释
 # 减少log信息
+# 增加redis交易函数
 # ============================================================================
 # 打板策略 v2.2.0
 # 基于之前版本的策略 完整重构买点模型
@@ -41,10 +42,10 @@ from datetime import datetime, timedelta
 import math
 import gc
 
-# 导入自定义SQL交易函数
-from myqmt_sql import (
-    order_zzy as order,
-    order_target_zzy as order_target,
+# 导入自定义redis交易函数
+from send_to_redis import (
+    order_zzy as order, 
+    order_target_zzy as order_target, 
     order_value_zzy as order_value,
     order_target_value_zzy as order_target_value
 )
