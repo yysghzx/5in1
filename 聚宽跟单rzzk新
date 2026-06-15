@@ -1,0 +1,254 @@
+# coding:gbk
+import redis
+import time,datetime
+import json
+import pandas as pd
+pd.set_option('display.max_rows', None)
+
+
+
+
+# ========== 配置区 ==========
+QUEUE_NAME = "data_queue"
+BLOCK_TIMEOUT = 1
+
+
+# 保留原有全局类，不新增多余函数
+class a:
+    stockall=[]
+    conn = None
+    keep_info=[]
+    limt_set=1.5
+    limit_dict={}
+    redis_config={}
+
+    invalid_orders=[]
+A = a()
+
+
+def init(ContextInfo):
+    A.acct = account
+    A.acct_type = accountType
+    start_time_str = datetime.datetime.now().date().strftime('%Y-%m-%d') + ' 000001'
+    ContextInfo.run_time("screen_stock","1nSecond",start_time_str)
+    A.stockall = ContextInfo.get_stock_list_in_sector('沪深A股')
+
+
+def after_init(ContextInfo):
+    A.limt_set=float(SET_LIMT)
+    A.redis_config = {
+        "host": "YOUR_REDIS_HOST",
+        "port": 6379,
+        "password": "YOUR_REDIS_PASSWORD",
+        "db": 0,
+        "decode_responses": True,
+        "socket_connect_timeout": 5,
+        "socket_timeout": 5
+        }
+    print("=" * 50)
+    print(f"队列消费程序启动")
+    print(f"监听队列：{QUEUE_NAME}")
+    print("=" * 50 + "\n")
+    try:
+        A.conn = redis.Redis(**A.redis_config)
+        A.conn.ping()
+        print("Redis 首次连接成功")
+    except Exception as e:
+        print(f"首次连接失败：{e}")
+        A.conn = None
+
+
+def screen_stock(ContextInfo):
+    """定时任务，直接原生ping检测+断线重连，无额外函数"""
+    while True:
+        try:
+            A.conn.ping()
+        except Exception:
+            print(f"{time.strftime('%H:%M:%S')} 连接断开，等待{3}秒重连")
+            time.sleep(3)
+            try:
+                A.conn = redis.Redis(**A.redis_config)
+                A.conn.ping()
+                print("重连Redis成功")
+            except Exception as e:
+                print(f"重连失败：{e}")
+                A.conn = None
+                continue
+
+        # 正常拉取队列消息
+        try:
+            result = A.conn.brpop(QUEUE_NAME, timeout=1)
+        except Exception as e:
+            print(f"读取队列异常：{e}")
+            A.conn = None
+            continue
+
+        if result is not None:
+            queue_name, msg = result
+            timestamp = time.strftime('%H:%M:%S')
+            print(f"[{timestamp}] 收到数据：{msg}")
+            try:
+                data = json.loads(msg)
+            except json.JSONDecodeError:
+                print("JSON解析失败，跳过本条消息")
+                continue
+
+            if "remark" in data:
+                jq_code = data["stock_code"]
+                if jq_code.startswith(('6')):
+                    code=jq_code[:6]+'.SH'
+                elif jq_code.startswith(('3','0','12')):
+                    code=jq_code[:6]+'.SZ'
+                else:
+                    code=jq_code[:6]+'.BJ'
+                quantity = data["quantity"]
+                signal_time_str = data["signal_time"]
+                remark = data["remark"]
+                print(f"提取完成 | 标的代码:{code}, 委托量/金额:{quantity}, 下单类型:{remark}, 信号时间:{signal_time_str}")
+                signal_dt = datetime.datetime.strptime(signal_time_str, "%Y-%m-%d %H:%M:%S")
+                now_dt = datetime.datetime.now()
+                delta_seconds = abs((now_dt - signal_dt).total_seconds())
+            
+                print(f"信号时间:{signal_time_str}，当前本机时间:{now_dt.strftime('%Y-%m-%d %H:%M:%S')}，时间差：{delta_seconds:.2f} 秒")
+
+                if delta_seconds > 180:
+                    print(f"差值超过3分钟，跳过本条数据")
+                    continue
+                    
+                print(f"校验通过 | 标的:{code},委托值:{quantity},下单类型:{remark}")
+
+                tick = ContextInfo.get_full_tick([code])
+                lastPrice = tick[code]['lastPrice']
+                accounts = get_trade_detail_data(A.acct, A.acct_type, 'account')
+                if len(accounts) == 0:
+                    print('账号异常u检查账号')
+                    return
+                canuser_amount = round(accounts[0].m_dAvailable, 2) #可用资金
+                positions = get_trade_detail_data(A.acct, A.acct_type, 'position')
+                keep_vol=0  #持仓量
+                can_sell=0  #可用量
+                for dt in positions:
+                    keep_code = dt.m_strInstrumentID + '.' + dt.m_strExchangeID
+                    if code == keep_code:
+                        keep_vol=dt.m_nVolume
+                        can_sell=dt.m_nCanUseVolume
+                can_buy_vol=canuser_amount/lastPrice #可买数量
+                # 聚宽四个开仓函数
+                if remark=='order': #类型1 买入或者卖出固定数量的股票 这里传入单位是股 
+                    if quantity>=100: #买入
+                        order_vol=int(min(can_buy_vol,quantity)/100)*100
+                        buy_code(ContextInfo,code,order_vol)
+                    
+                    if quantity<0:
+                        order_vol=min(can_sell,abs(quantity))
+                        sell_code(ContextInfo,code,order_vol)
+                        
+                elif remark=='order_target': # 最终数量达到 设定数量   这里传入但是也是 股
+                    chazhi=quantity-keep_vol  #目标数量 - 持仓量 ， 为负 我就卖  为正 我就卖  1000-500
+                    if chazhi>100:
+                        order_vol=int(min(can_buy_vol,chazhi)/100)*100
+                        buy_code(ContextInfo,code,order_vol)
+                    if chazhi<0:
+                        order_vol=min(can_sell,abs(chazhi))  
+                        sell_code(ContextInfo, code, order_vol)
+
+                elif remark=='order_value':  # 这里传入 金额 ， 要买入 固定金额 元
+
+                    if quantity>0:
+                        buy_vol=quantity/lastPrice
+                        order_vol=int(min(buy_vol,can_buy_vol)/100)*100
+                        buy_code(ContextInfo,code,order_vol)
+                    if quantity<0:
+                        sell_vol=abs(quantity)/lastPrice
+                        order_vol=min(sell_vol,can_sell)
+                        sell_code(ContextInfo, code, order_vol)
+                    
+                elif remark=='order_target_value':  #这个是最终金额 ，期望的最终金额， 
+                    if quantity==0:
+                        sell_code(ContextInfo, code, can_sell)
+                        continue
+                    hope_vol=quantity/lastPrice
+                    chazhi=hope_vol-keep_vol
+                    if chazhi>0:
+                        order_vol=int(min(can_buy_vol,chazhi)/100)*100
+                        buy_code(ContextInfo,code,order_vol)
+                    if chazhi<0:
+                        order_vol=min(can_sell,abs(chazhi))  
+                        sell_code(ContextInfo, code, order_vol)
+        #这里对订单进行过滤
+        now = datetime.datetime.now()
+        now_time = now.strftime('%H%M%S')
+        if '093000' < now_time < '145700':
+            orders = get_trade_detail_data(A.acct, 'stock', 'order')
+            for o in orders:
+                #判定下单类型 确定检测时长
+                check_num=3
+                status=o.m_nOrderStatus #任务状态
+                orderid=o.m_strOrderSysID #委托号
+                if orderid in A.invalid_orders:
+                    continue
+                
+                code=o.m_strInstrumentID+'.'+o.m_strExchangeID
+                if code in A.limit_dict   : # 在  涨停价
+                    limit_price=A.limit_dict[code]
+                    if limit_price==o.m_dLimitPrice: #如果是涨停委托  这比订单一直挂着不处理
+                        A.invalid_orders.append(orderid) 
+                        continue
+
+                #废单进行重试，重试后的订单放到已执行列表
+                if status==57 and orderid not in A.invalid_orders:
+                    order_vol=o.m_nVolumeTotalOriginal #委托数量
+                    if order_vol>0:
+                        if  o.m_nOffsetFlag ==48:
+                            buy_code(ContextInfo,code,order_vol)
+                        elif  o.m_nOffsetFlag ==49:
+                            sell_code(ContextInfo,code,order_vol)
+                    A.invalid_orders.append(orderid) 
+                    continue
+                
+                order_time=o.m_strInsertTime #委托时间
+                n_t = int(now_time[:2])*3600 + int(now_time[2:4])*60 + int(now_time[4:]) #当前时间 
+                o_t = int(order_time[:2])*3600 + int(order_time[2:4])*60 + int(order_time[4:]) #订单时间
+                #如果是已经报 或者 部成 并且订单委托时长大于3秒 直接撤单 第二轮再查询查单数量
+                if status  in(50,55)  and n_t-o_t>=check_num:
+                    if  can_cancel_order(orderid,A.acct,A.acct_type):
+                        cancel(orderid, A.acct, A.acct_type, ContextInfo)
+                #如果订单时部撤 或者已经撤单 查询撤单数量 继续委托
+                if status  in(53,54) and  orderid not in A.invalid_orders:
+                    cance_vol=o.m_dCancelAmount
+                    if cance_vol>0:
+                        if  o.m_nOffsetFlag ==48:
+                            buy_code(ContextInfo,code,cance_vol)
+                        elif  o.m_nOffsetFlag ==49:
+                            sell_code(ContextInfo,code,cance_vol)
+                    A.invalid_orders.append(orderid) 
+
+
+def buy_code(ContextInfo,code,order_vol):
+    tick = ContextInfo.get_full_tick([code])
+    lastPrice = tick[code]['lastPrice']
+    detail = ContextInfo.get_instrument_detail(code)
+    up_limit = detail['UpStopPrice']
+    make_price=round(lastPrice*(1+A.limt_set/100),2)
+    order_price=min(up_limit,make_price)
+    if order_vol>=100:
+        print(f'{code}下单卖出  价格：{order_price}  委托量:{order_vol}')
+        passorder(23, 1101, A.acct, code, 11, order_price, order_vol, 2, ContextInfo)
+        A.limit_dict[code]=up_limit
+
+
+def sell_code(ContextInfo,code,order_vol):
+    tick = ContextInfo.get_full_tick([code])
+    lastPrice = tick[code]['lastPrice']
+    detail = ContextInfo.get_instrument_detail(code)
+    dt_limit = detail['DownStopPrice']
+    make_price=round(lastPrice*(1-A.limt_set/100),2)
+    order_price=max(dt_limit,make_price)
+    if order_vol>0:
+        print(f'{code}下单卖出  价格:{order_price}   委托量:{order_vol}')
+        passorder(24, 1101, A.acct, code, 11, order_price, order_vol, 2, ContextInfo)
+        A.limit_dict[code]=dt_limit 
+
+
+
+
