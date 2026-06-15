@@ -6,6 +6,7 @@
 # 增加小白注释
 # 减少log信息
 # 增加redis交易函数
+# 只有在放量破均价后，还出现“跌破昨收 / 深破均价 2% / 日内高点回撤 5%”之一，才触发“前日涨停烂板放量卖出”
 # ============================================================================
 # 打板策略 v2.2.0
 # 基于之前版本的策略 完整重构买点模型
@@ -149,6 +150,9 @@ def initialize(context):
     g.stocks_limit_up_today = set()
     g.max_sell_vol_ratio = 1.4  # 最大波段卖量比1.4
     g.morning_rebalance_vol_ratio = 2.1  # 早盘调仓量比阈值
+    g.limit_break_sell_vol_ratio = 1.8  # 前日涨停烂板卖出的最低估算量比
+    g.limit_break_sell_vwap_discount = 0.98  # 深破当日均价线才确认走弱
+    g.limit_break_sell_intraday_retreat = 0.05  # 从日内高点回撤超过5%才确认走弱
 
     # 新增：选股完成标志
     g.stock_list_done = False
@@ -426,7 +430,6 @@ def sell_for_rebalance(context):
 
     for stock in stocks_to_sell:
         log.info(f"早盘调仓-放量卖出: {stock}, 盈利不足5%且量能放大, 卖出腾仓")
-#         log.info(f"【早盘调仓-放量卖出】{stock} 盈利不足5%且量能放大，卖出以腾仓位")
         order_target_value(stock, 0)
 
 
@@ -2829,7 +2832,7 @@ def buy(context):
             if not cap_ok:
                 # log.debug(
                 #     f"弱转强过滤 {s}：市值不符合 (is_broken={is_broken}, market_cap={market_cap}亿, circ_market_cap={circ_market_cap}亿)")
-                # continue
+                continue
 
             # 5. 量能条件（保持不变，如有需要也可放宽）
                 pass
@@ -5521,16 +5524,27 @@ def sell2(context):
                             if is_yday_limit_up and not is_limit_up and yday_vol > 0:
                                 today_start = current_dt.replace(hour=9, minute=30, second=0)
                                 min_data = get_price(stock, start_date=today_start, end_date=current_dt,
-                                                     frequency='1m', fields=['volume', 'money'], skip_paused=True)
+                                                     frequency='1m', fields=['high', 'volume', 'money'], skip_paused=True)
                                 if not min_data.empty and min_data['volume'].sum() > 0:
                                     today_acc_vol = min_data['volume'].sum()
                                     today_acc_money = min_data['money'].sum()
                                     today_vwap = today_acc_money / today_acc_vol
+                                    today_high = max(float(min_data['high'].max()), current_price)
                                     vol_ratio = today_acc_vol / yday_vol
                                     market_min = 120 + (current_time.hour - 13) * 60 + current_time.minute
                                     if market_min > 0:
                                         est_ratio = vol_ratio * (240.0 / market_min)
-                                        if est_ratio > 1.8 and current_price < today_vwap:
+                                        sell_vol_ratio = getattr(g, 'limit_break_sell_vol_ratio', 1.8)
+                                        vwap_discount = getattr(g, 'limit_break_sell_vwap_discount', 0.98)
+                                        retreat_limit = getattr(g, 'limit_break_sell_intraday_retreat', 0.05)
+                                        intraday_retreat = ((today_high - current_price) / today_high
+                                                           if today_high > 0 else 0)
+                                        weak_break_board = (
+                                            current_price < yday_close or
+                                            current_price < today_vwap * vwap_discount or
+                                            intraday_retreat >= retreat_limit
+                                        )
+                                        if est_ratio > sell_vol_ratio and current_price < today_vwap and weak_break_board:
                                             details = {
                                                 '触发信号': '前日涨停+烂板放量+破均价线',
                                                 '前日收盘': f"{yday_close:.2f}(涨停)",
@@ -5539,8 +5553,11 @@ def sell2(context):
                                                 '当日均价': f"{today_vwap:.2f}",
                                                 '估算全天倍数': f"{est_ratio:.2f}",
                                                 '当前价': f"{current_price:.2f}",
+                                                '日内最高': f"{today_high:.2f}",
+                                                '日内回撤': f"{intraday_retreat:.2%}",
                                                 '涨停价': f"{high_limit:.2f}",
-                                                '均线偏离': f"{(current_price/today_vwap-1):.2%}"
+                                                '均线偏离': f"{(current_price/today_vwap-1):.2%}",
+                                                '走弱确认': '跌破昨收/深破均价/日内大回撤'
                                             }
                                             record_sell_trade(context, stock, "前日涨停烂板放量卖出", details, current_data, date)
                                             order_target_value(stock, 0)

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TCStageLayout>
+    <control note="控件">
+        <variable note="控件">
+            <item position="" bind="name" value="YOUR_SQL_HOST" note="服务器地址" name="服务器地址" type="intput"/>
+            <item position="" bind="pws" value="YOUR_SQL_PASSWORD" note="数据库密码" name="数据库密码" type="intput"/>
+            <item position="" bind="start_time" value="093000" note="开始时间" name="开始时间" type="intput"/>
+            <item position="" bind="end_time" value="153000" note="结束时间" name="结束时间" type="intput"/>
+            <item position="" bind="Buy_Amount" value="0" note="买入金额" name="买入金额" type="intput"/>
+            <item position="" bind="Buy_num" value="100" note="最多买入股票数" name="最多买入股票数" type="intput"/>
+            <item position="" bind="sell_ratio" value="100" note="卖出比例" name="卖出比例" type="intput"/>
+            <item position="" bind="bili" value="1" note="跟单比例" name="跟单比例" type="intput"/>
+            <item position="" bind="username" value="qmt" note="用户名" name="用户名" type="intput"/>
+            <item position="" bind="fenlei" value="未分类" note="策略分类" name="策略分类" type="intput"/>
+            <item comboType="custom" position="" list="买五价,买四价,买三价,买二价,买一价,涨跌停价,对手价,最优五档成交" bind="fs_sell" value="最优五档成交" note="卖出委托方式" name="卖出委托方式" type="combo"/>
+            <item comboType="custom" position="" list="卖五价,卖四价,卖三价,卖二价,卖一价,笼子上限,涨跌停价,对手价,最优五档成交" bind="fs_buy" value="最优五档成交" note="买入委托方式" name="买入委托方式" type="combo"/>
+        </variable>
+    </control>
+</TCStageLayout>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TCStageLayout>
+    <control note="控件">
+        <variable note="控件">
+            <item position="" bind="IP" value="YOUR_REDIS_HOST" note="信号源服务器IP地址" name="IP地址" type="intput"/>
+            <item position="" bind="PORTS" value="6379" note="信号源服务器端口号" name="端口" type="intput"/>
+            <item position="" bind="PASSWORD" value="YOUR_REDIS_PASSWORD" note="" name="密码" type="intput"/>
+            <item position="" bind="SET_LIMT" value="1.5" note="" name="下单价 上调 %" type="intput"/>
+        </variable>
+    </control>
+</TCStageLayout>
