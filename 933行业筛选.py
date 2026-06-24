@@ -1,12 +1,13 @@
 # ============================================================================
-# 增加申万行业筛选
-# 增加资金监控不动qmt账户外来资金
-# 增加deepseek概念映射
-# 增加5%缓冲资金防止股价上涨买不到票
-# 增加小白注释
-# 减少log信息
-# 增加redis交易函数
-# 只有在放量破均价后，还出现“跌破昨收 / 深破均价 2% / 日内高点回撤 5%”之一，才触发“前日涨停烂板放量卖出”
+# 新增统一市值门槛：连板龙头、首板低开、反向首板低开要求总市值不少于50亿、流通市值不高于520亿
+# 新增申万行业筛选
+# 新增资金监控，避免 QMT 账户外来资金干扰
+# 新增 DeepSeek 概念映射
+# 新增 5% 资金缓冲，降低买入时因价格上浮导致的资金不足问题
+# 新增阅读注释，便于快速理解策略结构
+# 优化日志输出，减少低价值日志信息
+# 新增 Redis 交易函数
+# 优化前日涨停烂板放量卖出逻辑：仅在放量跌破均价后，再出现跌破昨收、深破均价 2% 或日内高点回撤 5% 之一时触发卖出
 # ============================================================================
 # 打板策略 v2.2.0
 # 基于之前版本的策略 完整重构买点模型
@@ -2489,6 +2490,8 @@ def filter_by_valuation(stock_list, context):
         1. pe_ratio > 0 且 pe_ratio <= 200
         2. pcf_ratio > 0
         3. pb_ratio > 0
+
+    注意：这里只负责 PE / PCF / PB 估值过滤，不处理总市值或流通市值门槛。
     """
     if not stock_list:
         return []
@@ -2561,6 +2564,54 @@ def filter_by_valuation(stock_list, context):
     except Exception as e:
 #         log.error(f"估值过滤失败: {str(e)}")
         return stock_list
+
+def filter_by_market_cap(stock_list, context, min_market_cap=50, max_circulating_market_cap=520):
+    """
+    统一的市值门槛过滤。
+    条件：
+        1. 总市值 >= min_market_cap（单位：亿元）
+        2. 流通市值 <= max_circulating_market_cap（单位：亿元）
+
+    注意：缺失估值数据时，直接视为不满足硬性门槛。
+    """
+    if not stock_list:
+        return []
+
+    try:
+        valuation_df = get_valuation(
+            stock_list,
+            end_date=context.previous_date,
+            count=1,
+            fields=['market_cap', 'circulating_market_cap']
+        )
+        if valuation_df.empty:
+            return []
+
+        valuation_map = {}
+        for _, row in valuation_df.iterrows():
+            valuation_map[row['code']] = row
+
+        filtered = []
+        for stock in stock_list:
+            row = valuation_map.get(stock)
+            if row is None:
+                continue
+
+            market_cap = row.get('market_cap')
+            circ_market_cap = row.get('circulating_market_cap')
+            if pd.isna(market_cap) or pd.isna(circ_market_cap):
+                continue
+
+            if market_cap < min_market_cap or circ_market_cap > max_circulating_market_cap:
+                continue
+
+            filtered.append(stock)
+
+        return filtered
+
+    except Exception as e:
+#         log.error(f"市值门槛过滤失败: {str(e)}")
+        return []
 
 # 交易
 def buy(context):
@@ -3005,6 +3056,16 @@ def buy(context):
         gk_stocks = filter_by_valuation(gk_stocks, context)
         dk_stocks = filter_by_valuation(dk_stocks, context)
         fxsbdk_stocks = filter_by_valuation(fxsbdk_stocks, context)
+
+        # ========== 统一市值门槛过滤（仅作用于连板龙头 / 首板低开 / 反向首板低开） ==========
+        lblt_stocks = filter_by_market_cap(lblt_stocks, context, min_market_cap=50, max_circulating_market_cap=520)
+        dk_stocks = filter_by_market_cap(dk_stocks, context, min_market_cap=50, max_circulating_market_cap=520)
+        fxsbdk_stocks = filter_by_market_cap(
+            fxsbdk_stocks,
+            context,
+            min_market_cap=50,
+            max_circulating_market_cap=520
+        )
 
         # 关键：将筛选后的列表赋值为全局变量，供get_buy_reason函数调用
         g.lblt_stocks = lblt_stocks
